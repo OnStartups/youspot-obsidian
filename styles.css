@@ -1,0 +1,23 @@
+.youspot-status {
+  cursor: pointer;
+}
+
+.youspot-status.is-error {
+  color: var(--text-error);
+}
+
+.youspot-settings-warning {
+  border-left: 3px solid var(--text-warning);
+  padding: var(--size-4-2) var(--size-4-3);
+  margin: var(--size-4-3) 0;
+  background: var(--background-secondary);
+}
+
+.youspot-settings-warning code {
+  user-select: all;
+}
+
+.youspot-settings-account {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
