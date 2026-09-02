@@ -43,16 +43,16 @@ There is no automatic merging.
 
 ## Commands
 
-| Command | Does |
-| --- | --- |
-| Sync now | Push pending notes, then pull Brain changes |
-| Push this note | Push the active note immediately |
-| Push this note (overwrite server) | Same, but win over an edit made in YouSpot |
-| Pull Brain now | Pull only |
-| Pull server version of this note | Write the YouSpot copy beside the note |
-| Reconcile folder | Rescan the folder against local state and the server |
-| Open in YouSpot | Open the active note's object page |
-| Reset sync state | Forget local bookkeeping; the next sync re-pushes the folder |
+| Command                           | Does                                                         |
+| --------------------------------- | ------------------------------------------------------------ |
+| Sync now                          | Push pending notes, then pull Brain changes                  |
+| Push this note                    | Push the active note immediately                             |
+| Push this note (overwrite server) | Same, but win over an edit made in YouSpot                   |
+| Pull Brain now                    | Pull only                                                    |
+| Pull server version of this note  | Write the YouSpot copy beside the note                       |
+| Reconcile folder                  | Rescan the folder against local state and the server         |
+| Open in YouSpot                   | Open the active note's object page                           |
+| Reset sync state                  | Forget local bookkeeping; the next sync re-pushes the folder |
 
 ## Privacy
 
