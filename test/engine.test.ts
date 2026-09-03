@@ -115,6 +115,10 @@ function setup(overrides: Partial<PluginData["settings"]> = {}) {
     },
     notify: (m) => notices.push(m),
     now: () => 5000,
+    // Obsidian passes window's timers; here plain globals are enough, and
+    // the engine never reaches for either itself.
+    setTimer: (fn, ms) => setTimeout(fn, ms) as unknown as number,
+    clearTimer: (id) => clearTimeout(id),
   });
   return { vault, http, data, engine, notices, persisted: () => persisted };
 }

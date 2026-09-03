@@ -17,6 +17,18 @@ const pkg = JSON.parse(await readFile(join(APP, "package.json"), "utf8")) as Rec
   unknown
 >;
 
+// versions.json is a record of what each published version actually required,
+// which Obsidian reads to pick a release for an older client. Raising
+// minAppVersion without bumping the version silently rewrites that record for
+// something already downloadable — so refuse, rather than describe a release
+// as needing an Obsidian its own manifest never asked for.
+const known = versions[manifest.version];
+if (known && known !== manifest.minAppVersion) {
+  throw new Error(
+    `versions.json already records ${manifest.version} as needing ${known}, not ` +
+      `${manifest.minAppVersion}. Bump the version rather than restating a published one.`,
+  );
+}
 versions[manifest.version] = manifest.minAppVersion;
 pkg.version = manifest.version;
 

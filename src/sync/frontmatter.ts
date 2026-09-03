@@ -36,7 +36,10 @@ const RESERVED = new Set(["true", "false", "null", "yes", "no", "on", "off", "~"
 function scalar(value: unknown): string {
   if (value === null || value === undefined) return "null";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
-  const text = String(value);
+  // Frontmatter values arrive as unknown from the metadata cache. Anything
+  // that is not already a primitive would stringify to "[object Object]",
+  // which is worse than JSON in a YAML value.
+  const text = typeof value === "string" ? value : JSON.stringify(value);
   if (
     text === "" ||
     RESERVED.has(text.toLowerCase()) ||

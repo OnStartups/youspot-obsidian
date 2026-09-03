@@ -21,3 +21,7 @@
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+.youspot-wide-input {
+  width: 100%;
+}

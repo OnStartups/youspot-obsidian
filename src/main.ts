@@ -16,7 +16,7 @@ export default class YouSpotPlugin extends Plugin {
   accountEmail: string | null = null;
   private statusEl!: HTMLElement;
   private intervalId: number | null = null;
-  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistTimer: number | null = null;
 
   get prefs() {
     return this.data.settings;
@@ -41,6 +41,8 @@ export default class YouSpotPlugin extends Plugin {
       persist: () => this.persist(),
       notify: (message) => new Notice(message),
       onStatus: () => this.renderStatus(),
+      setTimer: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimer: (id) => window.clearTimeout(id),
     });
 
     this.addSettingTab(new YouSpotSettingTab(this.app, this));
@@ -61,7 +63,7 @@ export default class YouSpotPlugin extends Plugin {
   override onunload(): void {
     this.engine.stop();
     if (this.persistTimer) {
-      clearTimeout(this.persistTimer);
+      window.clearTimeout(this.persistTimer);
       void this.saveData(this.data);
     }
   }
@@ -145,8 +147,8 @@ export default class YouSpotPlugin extends Plugin {
         }),
     });
     this.addCommand({
-      id: "open-in-youspot",
-      name: "Open in YouSpot",
+      id: "open-object",
+      name: "Open this note's object in the browser",
       checkCallback: (checking) => {
         const file = this.activeFile();
         const id = file ? this.objectIdFor(file) : null;
@@ -173,8 +175,8 @@ export default class YouSpotPlugin extends Plugin {
   }
 
   private objectIdFor(file: TFile): string | null {
-    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
-    const id = fm?.youspot_id;
+    const fm: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const id = fm && typeof fm === "object" ? (fm as Record<string, unknown>).youspot_id : null;
     if (typeof id === "string" && id) return id;
     return this.state.notes[file.path]?.youspot_id ?? null;
   }
@@ -215,8 +217,8 @@ export default class YouSpotPlugin extends Plugin {
   }
 
   private persist(): void {
-    if (this.persistTimer) clearTimeout(this.persistTimer);
-    this.persistTimer = setTimeout(() => {
+    if (this.persistTimer) window.clearTimeout(this.persistTimer);
+    this.persistTimer = window.setTimeout(() => {
       this.persistTimer = null;
       void this.saveData(this.data);
     }, 500);

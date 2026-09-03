@@ -7,7 +7,11 @@ import { pluralFolder } from "./sync/paths";
 
 export { DEFAULT_SETTINGS };
 
-const GITIGNORE_LINE = ".obsidian/plugins/youspot/data.json";
+/** Where the token actually sits, asked of the vault rather than assumed —
+ *  configDir is not always `.obsidian`. */
+function gitignoreLine(app: App): string {
+  return `${app.vault.configDir}/plugins/youspot/data.json`;
+}
 
 class ConfirmModal extends Modal {
   constructor(
@@ -74,7 +78,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
       )
       .addText((t) => {
         t.inputEl.type = "password";
-        t.inputEl.style.width = "100%";
+        t.inputEl.addClass("youspot-wide-input");
         t.setPlaceholder("mcp_…")
           .setValue(s.token)
           .onChange(async (value) => {
@@ -111,13 +115,13 @@ export class YouSpotSettingTab extends PluginSettingTab {
     const warning = el.createDiv({ cls: "youspot-settings-warning" });
     warning.createEl("strong", { text: "The token is stored in plain text inside this vault." });
     warning.createEl("p", {
-      text: "If the vault is in git or synced elsewhere, keep the plugin data file out of it:",
+      text: "If the vault is in Git or synced elsewhere, keep the plugin data file out of it:",
     });
     const line = warning.createEl("p");
-    line.createEl("code", { text: GITIGNORE_LINE });
+    line.createEl("code", { text: gitignoreLine(this.app) });
     new Setting(warning).addButton((b) =>
       b.setButtonText("Copy .gitignore line").onClick(async () => {
-        await navigator.clipboard.writeText(`${GITIGNORE_LINE}\n`);
+        await navigator.clipboard.writeText(`${gitignoreLine(this.app)}\n`);
         new Notice("Copied.");
       }),
     );
@@ -152,9 +156,9 @@ export class YouSpotSettingTab extends PluginSettingTab {
       .setDesc("Only notes inside this folder go to YouSpot. Sync is off until one is chosen.")
       .addText((t) => {
         t.setPlaceholder("knowledge").setValue(s.syncFolder);
-        new FolderSuggest(this.app, t.inputEl, async (folder) => {
+        new FolderSuggest(this.app, t.inputEl, (folder) => {
           s.syncFolder = folder;
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         });
         t.onChange(async (value) => {
           s.syncFolder = value.trim().replace(/^\/+|\/+$/g, "");

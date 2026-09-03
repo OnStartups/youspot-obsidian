@@ -45,7 +45,9 @@ export class ObsidianVault implements VaultPort {
   }
 
   trash(path: string): Promise<void> {
-    return this.app.vault.trash(this.file(path), true);
+    // fileManager, not vault: it honours the user's "deleted files" setting
+    // rather than deciding for them where an export they never wrote goes.
+    return this.app.fileManager.trashFile(this.file(path));
   }
 
   async ensureFolder(path: string): Promise<void> {

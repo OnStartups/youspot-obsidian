@@ -20,6 +20,14 @@ export interface EngineDeps {
   now?: () => number;
   debounceMs?: number;
   maxWaitMs?: number;
+  /**
+   * Obsidian wants `window.setTimeout` so a timer belongs to the window it
+   * was scheduled from. The engine has no window — it is the same reason
+   * `now` is injected — so main.ts passes the real ones and the tests pass
+   * plain globals.
+   */
+  setTimer: (fn: () => void, ms: number) => number;
+  clearTimer: (id: number) => void;
 }
 
 export interface PushSummary {
@@ -43,8 +51,8 @@ export class SyncEngine {
   private pushing: Promise<PushSummary> | null = null;
   private pulling: Promise<PullSummary> | null = null;
   private dirty = false;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private maxWaitTimer: ReturnType<typeof setTimeout> | null = null;
+  private debounceTimer: number | null = null;
+  private maxWaitTimer: number | null = null;
   private backoffMs = MIN_BACKOFF;
   private backoffUntil = 0;
   private halted = false;
@@ -53,6 +61,14 @@ export class SyncEngine {
 
   private get now(): number {
     return (this.deps.now ?? Date.now)();
+  }
+
+  private setTimer(fn: () => void, ms: number): number {
+    return this.deps.setTimer(fn, ms);
+  }
+
+  private clearTimer(id: number): void {
+    this.deps.clearTimer(id);
   }
 
   get settings() {
@@ -87,8 +103,8 @@ export class SyncEngine {
   }
 
   stop(): void {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
+    if (this.debounceTimer) this.clearTimer(this.debounceTimer);
+    if (this.maxWaitTimer) this.clearTimer(this.maxWaitTimer);
     this.debounceTimer = null;
     this.maxWaitTimer = null;
   }
@@ -145,16 +161,16 @@ export class SyncEngine {
     if (!this.configured || !this.settings.syncOnSave) return;
     const debounce = this.deps.debounceMs ?? 3_000;
     const maxWait = this.deps.maxWaitMs ?? 15_000;
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.debounceTimer = setTimeout(() => void this.flush(), debounce);
+    if (this.debounceTimer) this.clearTimer(this.debounceTimer);
+    this.debounceTimer = this.setTimer(() => void this.flush(), debounce);
     if (!this.maxWaitTimer) {
-      this.maxWaitTimer = setTimeout(() => void this.flush(), maxWait);
+      this.maxWaitTimer = this.setTimer(() => void this.flush(), maxWait);
     }
   }
 
   private async flush(): Promise<void> {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer);
+    if (this.debounceTimer) this.clearTimer(this.debounceTimer);
+    if (this.maxWaitTimer) this.clearTimer(this.maxWaitTimer);
     this.debounceTimer = null;
     this.maxWaitTimer = null;
     await this.push();
@@ -493,7 +509,7 @@ export class SyncEngine {
   }
 
   private rearm(ms: number): void {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.debounceTimer = setTimeout(() => void this.flush(), ms);
+    if (this.debounceTimer) this.clearTimer(this.debounceTimer);
+    this.debounceTimer = this.setTimer(() => void this.flush(), ms);
   }
 }
