@@ -1,0 +1,64 @@
+# Builds the plugin and publishes the release, in response to a tag.
+#
+# The build has to happen here rather than on someone's laptop: an artifact
+# attestation is a signed statement that these bytes were built from this
+# commit, which is only worth anything if GitHub watched it happen. That is
+# also why the release is created here rather than uploaded to — the assets
+# and the attestation are produced by the same run.
+#
+# Cut a release by pushing a tag equal to manifest.json's version, with no
+# `v` prefix, which is what Obsidian matches on.
+
+name: release
+
+on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: The tag must match the manifest
+        run: |
+          manifest=$(node -p "require('./manifest.json').version")
+          if [ "$manifest" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME != manifest $manifest" >&2
+            exit 1
+          fi
+
+      - name: Checks
+        run: |
+          bun run typecheck
+          bun run lint:obsidian
+          bun test
+
+      - name: Build
+        run: bun run build
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/main.js, dist/styles.css"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "YouSpot for Obsidian $GITHUB_REF_NAME" \
+            dist/main.js dist/manifest.json dist/styles.css
