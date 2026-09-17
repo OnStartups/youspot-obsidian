@@ -1,5 +1,8 @@
 import type {
   ChangesResponse,
+  ExportCapabilities,
+  ExportRun,
+  RefreshRequest,
   DeleteRef,
   DeleteResponse,
   InventoryResponse,
@@ -14,11 +17,13 @@ export interface HttpRequest {
   method: "GET" | "POST";
   headers: Record<string, string>;
   body?: string;
+  binary?: boolean;
 }
 
 export interface HttpResponse {
   status: number;
   text: string;
+  bytes?: ArrayBuffer;
 }
 
 export interface HttpPort {
@@ -92,6 +97,34 @@ export class ApiClient {
     }
     if (!json) throw new ApiError(`${path} returned no JSON`, res.status, "bad_json");
     return json as T;
+  }
+
+  capabilities(): Promise<ExportCapabilities> {
+    return this.call("GET", "/api/obsidian/export/capabilities");
+  }
+
+  createExport(options: RefreshRequest): Promise<{ run: ExportRun }> {
+    return this.call("POST", "/api/obsidian/exports", options);
+  }
+
+  exportStatus(id: string): Promise<{ run: ExportRun }> {
+    return this.call("GET", `/api/obsidian/exports/${encodeURIComponent(id)}`);
+  }
+
+  releaseExport(id: string): Promise<{ success: boolean }> {
+    return this.call("POST", `/api/obsidian/exports/${encodeURIComponent(id)}/release`);
+  }
+
+  async downloadExport(id: string): Promise<Uint8Array> {
+    const { url } = await this.call<{ url: string }>(
+      "GET",
+      `/api/obsidian/exports/${encodeURIComponent(id)}/download`,
+    );
+    if (new URL(url).protocol !== "https:") throw new Error("The export download must use HTTPS.");
+    const response = await this.http.request({ url, method: "GET", headers: {}, binary: true });
+    if (response.status !== 200 || !response.bytes)
+      throw new Error("The export download failed. Retry the refresh.");
+    return new Uint8Array(response.bytes);
   }
 
   me(): Promise<MeResponse> {

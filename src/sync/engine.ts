@@ -2,13 +2,14 @@ import { ApiError, type ApiClient } from "../api";
 import type { DeleteRef, PathRules, PluginData, PushNote } from "../types";
 import type { VaultPort } from "../vault-port";
 import { emitFrontmatter, splitFrontmatter } from "./frontmatter";
-import { localHash } from "./hash";
+import { localHash, sha256Hex } from "./hash";
 import { conflictPath, dirname, isExport, isSyncable } from "./paths";
 import { buildNotePayload } from "./payload";
 import { type PullAction, planPull } from "./pull";
 import { applyPushResults, forgetDeleted } from "./push";
 import { BATCH_SIZE, ChangeQueue, type QueueEntry } from "./queue";
 import { planReconcile } from "./scan";
+import { refreshBrain } from "./refresh";
 
 export interface EngineDeps {
   vault: VaultPort;
@@ -20,12 +21,6 @@ export interface EngineDeps {
   now?: () => number;
   debounceMs?: number;
   maxWaitMs?: number;
-  /**
-   * Obsidian wants `window.setTimeout` so a timer belongs to the window it
-   * was scheduled from. The engine has no window — it is the same reason
-   * `now` is injected — so main.ts passes the real ones and the tests pass
-   * plain globals.
-   */
   setTimer: (fn: () => void, ms: number) => number;
   clearTimer: (id: number) => void;
 }
@@ -50,6 +45,7 @@ export class SyncEngine {
   private readonly managed = new Set<string>();
   private pushing: Promise<PushSummary> | null = null;
   private pulling: Promise<PullSummary> | null = null;
+  private refreshing: Promise<void> | null = null;
   private dirty = false;
   private debounceTimer: number | null = null;
   private maxWaitTimer: number | null = null;
@@ -88,11 +84,15 @@ export class SyncEngine {
   }
 
   get running(): boolean {
-    return this.pushing !== null || this.pulling !== null;
+    return this.pushing !== null || this.pulling !== null || this.refreshing !== null;
   }
 
   get conflicts(): number {
-    return Object.values(this.state.notes).filter((n) => n.conflict).length;
+    return (
+      Object.values(this.state.notes).filter((n) => n.conflict).length +
+      (this.state.refreshReport?.conflicts.length ?? 0) +
+      (this.state.exportConflicts?.length ?? 0)
+    );
   }
 
   resume(): void {
@@ -109,8 +109,42 @@ export class SyncEngine {
     this.maxWaitTimer = null;
   }
 
+  private isManaged(path: string): boolean {
+    return (
+      Object.values(this.state.exports).some((entry) => entry.path === path) ||
+      Boolean(this.deps.vault.cache(path)?.frontmatter?.youspot_managed)
+    );
+  }
+
+  refresh(): Promise<void> {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = (async () => {
+      if (this.pushing) await this.pushing;
+      if (this.pulling) await this.pulling;
+      try {
+        await refreshBrain(this.deps);
+        this.state.lastError = null;
+      } catch (error) {
+        this.failed(error);
+      }
+      await this.deps.persist();
+    })().finally(() => {
+      this.refreshing = null;
+      this.deps.onStatus?.();
+    });
+    this.deps.onStatus?.();
+    return this.refreshing;
+  }
+
+  async cancelRefresh(): Promise<void> {
+    if (this.running) return;
+    if (this.state.refresh?.runId) await this.deps.api.releaseExport(this.state.refresh.runId);
+    delete this.state.refresh;
+    await this.deps.persist();
+  }
+
   handleChanged(path: string): void {
-    if (this.managed.has(path) || !isSyncable(path, this.rules)) return;
+    if (this.managed.has(path) || this.isManaged(path) || !isSyncable(path, this.rules)) return;
     this.queue.upsert(path, { youspotId: this.state.notes[path]?.youspot_id });
     this.schedule();
   }
@@ -135,7 +169,7 @@ export class SyncEngine {
       for (const entry of Object.values(this.state.exports)) {
         if (entry.path === from) entry.path = to;
       }
-      if (!isSyncable(to, rules)) return;
+      return;
     }
     const fromSyncable = isSyncable(from, rules);
     const toSyncable = isSyncable(to, rules);
@@ -177,6 +211,11 @@ export class SyncEngine {
   }
 
   async syncNow(): Promise<void> {
+    if (this.refreshing) return;
+    if (this.state.refresh) {
+      await this.refresh();
+      return;
+    }
     await this.push();
     if (this.settings.pullEnabled) await this.pull();
   }
@@ -198,6 +237,10 @@ export class SyncEngine {
   }
 
   async pushNote(path: string, force = false): Promise<PushSummary> {
+    if (this.isManaged(path)) {
+      this.deps.notify("Managed exports are local copies. Edit the original record in YouSpot.");
+      return { pushed: 0, deleted: 0, conflicts: 0, errors: 1 };
+    }
     if (!isSyncable(path, this.rules)) {
       this.deps.notify("This note is outside the YouSpot sync folder.");
       return { pushed: 0, deleted: 0, conflicts: 0, errors: 0 };
@@ -210,7 +253,7 @@ export class SyncEngine {
 
   private async runPush(): Promise<PushSummary> {
     const summary: PushSummary = { pushed: 0, deleted: 0, conflicts: 0, errors: 0 };
-    if (!this.configured || this.halted) return summary;
+    if (!this.configured || this.halted || this.refreshing) return summary;
     if (this.now < this.backoffUntil) {
       this.rearm(this.backoffUntil - this.now);
       return summary;
@@ -240,6 +283,7 @@ export class SyncEngine {
 
     const upserts: { entry: QueueEntry; mtime: number }[] = [];
     for (const entry of entries) {
+      if (this.isManaged(entry.path)) continue;
       const meta = this.deps.vault.stat(entry.path);
       if (entry.kind === "delete" || !meta) {
         const id = entry.youspotId ?? this.state.notes[entry.path]?.youspot_id;
@@ -335,6 +379,8 @@ export class SyncEngine {
   }
 
   pull(): Promise<PullSummary> {
+    if (this.refreshing) return Promise.resolve({ written: 0, trashed: 0 });
+    if (this.state.refresh) return this.refresh().then(() => ({ written: 0, trashed: 0 }));
     if (this.pulling) return this.pulling;
     this.pulling = this.runPull().finally(() => {
       this.pulling = null;
@@ -348,32 +394,34 @@ export class SyncEngine {
     if (!this.configured || this.halted || !this.settings.pullEnabled) return summary;
     this.deps.onStatus?.();
     const types: string[] = [];
+    const incrementalTypes = new Set(
+      this.settings.capabilities?.incremental_types ?? Object.keys(this.settings.exportTypes),
+    );
     for (const [type, on] of Object.entries(this.settings.exportTypes)) {
-      if (on) types.push(type);
+      if (on && incrementalTypes.has(type)) types.push(type);
     }
     if (types.length === 0) return summary;
     try {
       let page = 1;
       let nextSince: string | null = null;
-      const serverEdited = new Set<string>();
+      const objects = [];
+      const tombstones = [];
       for (;;) {
         const res = await this.deps.api.changes(this.state.watermark, types, page);
-        const plan = await planPull(
-          res.objects,
-          res.tombstones,
-          this.state,
-          this.settings,
-          this.rules,
-        );
-        for (const id of plan.serverEdited) serverEdited.add(id);
-        await this.applyPull(plan.actions, summary);
-        forgetDeleted(this.state, plan.forgetNotes);
-        for (const path of plan.forgetNotes) this.queue.upsert(path);
+        objects.push(...res.objects);
+        tombstones.push(...res.tombstones);
+        if (objects.length + tombstones.length > 20_000)
+          throw new Error("Use full refresh for this selection.");
         nextSince = res.next_since;
         if (!res.has_more) break;
         page += 1;
       }
-      this.state.serverEdited = Array.from(serverEdited);
+      const plan = await planPull(objects, tombstones, this.state, this.settings, this.rules);
+      this.state.exportConflicts = [];
+      await this.applyPull(plan.actions, summary);
+      forgetDeleted(this.state, plan.forgetNotes);
+      for (const path of plan.forgetNotes) this.queue.upsert(path);
+      this.state.serverEdited = plan.serverEdited;
       this.state.watermark = nextSince;
       this.state.lastPullAt = this.now;
       this.state.lastError = null;
@@ -388,23 +436,34 @@ export class SyncEngine {
 
   private async applyPull(actions: PullAction[], summary: PullSummary): Promise<void> {
     for (const action of actions) {
+      const existing = this.state.exports[action.objectId];
+      const previous = this.deps.vault.stat(action.path)
+        ? await this.deps.vault.read(action.path)
+        : null;
+      if (
+        previous !== null &&
+        (!existing || (await sha256Hex(previous)) !== existing.rendered_hash)
+      ) {
+        (this.state.exportConflicts ??= []).push(action.path);
+        continue;
+      }
       if (action.kind === "trash") {
-        await this.managedWrite(action.path, () => this.deps.vault.trash(action.path));
+        if (previous !== null)
+          await this.managedWrite(action.path, () => this.deps.vault.trash(action.path));
         delete this.state.exports[action.objectId];
         summary.trashed += 1;
         continue;
       }
+      if (previous !== null && (await sha256Hex(previous)) === action.hash) continue;
       await this.deps.vault.ensureFolder(dirname(action.path));
-      if (action.previousPath && this.deps.vault.stat(action.previousPath)) {
-        this.managed.add(action.path);
-        await this.managedWrite(action.previousPath, () =>
-          this.deps.vault.rename(action.previousPath as string, action.path),
-        );
-        this.managed.delete(action.path);
+      let written = false;
+      await this.managedWrite(action.path, async () => {
+        written = await this.deps.vault.writeGuarded(action.path, action.content, previous);
+      });
+      if (!written) {
+        (this.state.exportConflicts ??= []).push(action.path);
+        continue;
       }
-      await this.managedWrite(action.path, () =>
-        this.deps.vault.write(action.path, action.content),
-      );
       this.state.exports[action.objectId] = {
         path: action.path,
         type: action.type,
@@ -412,6 +471,7 @@ export class SyncEngine {
         updated_at: action.updatedAt,
       };
       summary.written += 1;
+      await this.deps.persist();
     }
   }
 
@@ -426,7 +486,11 @@ export class SyncEngine {
 
   async reconcile(): Promise<void> {
     if (!this.configured || this.halted) return;
-    const plan = planReconcile(this.deps.vault.listMarkdown(), this.state, this.rules);
+    const plan = planReconcile(
+      this.deps.vault.listMarkdown().filter((file) => !this.isManaged(file.path)),
+      this.state,
+      this.rules,
+    );
     for (const path of plan.upserts) {
       this.queue.upsert(path, { youspotId: this.state.notes[path]?.youspot_id });
     }
@@ -470,11 +534,14 @@ export class SyncEngine {
 
   resetState(): void {
     this.queue.clear();
-    const { vaultId } = this.state;
+    const { vaultId, exports, pendingWrites, refresh, refreshReport } = this.state;
     this.deps.data.state = {
       vaultId,
       notes: {},
-      exports: {},
+      exports,
+      pendingWrites,
+      refresh,
+      refreshReport,
       watermark: null,
       lastPushAt: null,
       lastPullAt: null,

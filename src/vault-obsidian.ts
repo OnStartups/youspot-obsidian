@@ -12,6 +12,10 @@ export class ObsidianVault implements VaultPort {
     return this.app.vault.getName();
   }
 
+  listPaths(): string[] {
+    return this.app.vault.getAllLoadedFiles().map((file) => file.path);
+  }
+
   listMarkdown(): FileMeta[] {
     return this.app.vault.getMarkdownFiles().map(meta);
   }
@@ -28,7 +32,35 @@ export class ObsidianVault implements VaultPort {
   }
 
   read(path: string): Promise<string> {
-    return this.app.vault.cachedRead(this.file(path));
+    return this.app.vault.read(this.file(path));
+  }
+
+  exists(path: string): boolean {
+    return this.app.vault.getAbstractFileByPath(normalizePath(path)) !== null;
+  }
+
+  readBinary(path: string): Promise<ArrayBuffer> {
+    return this.app.vault.readBinary(this.file(path));
+  }
+
+  async createBinary(path: string, bytes: ArrayBuffer): Promise<void> {
+    await this.app.vault.createBinary(normalizePath(path), bytes);
+  }
+
+  async writeGuarded(path: string, content: string, previous: string | null): Promise<boolean> {
+    if (previous === null) {
+      if (this.exists(path)) return false;
+      await this.app.vault.create(normalizePath(path), content);
+      return true;
+    }
+    if (!this.app.vault.getFileByPath(normalizePath(path))) return false;
+    let written = false;
+    await this.app.vault.process(this.file(path), (current) => {
+      if (current !== previous) return current;
+      written = true;
+      return content;
+    });
+    return written;
   }
 
   async write(path: string, content: string): Promise<void> {
@@ -45,8 +77,6 @@ export class ObsidianVault implements VaultPort {
   }
 
   trash(path: string): Promise<void> {
-    // fileManager, not vault: it honours the user's "deleted files" setting
-    // rather than deciding for them where an export they never wrote goes.
     return this.app.fileManager.trashFile(this.file(path));
   }
 

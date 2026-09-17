@@ -1,6 +1,6 @@
-import type { PluginData, SyncState, YouSpotSettings } from "../types";
+import type { ExportCapabilities, PluginData, SyncState, YouSpotSettings } from "../types";
 
-export const EXPORT_TYPES = ["contact", "company", "project", "note", "web_link"] as const;
+const LEGACY_DEFAULT_TYPES = ["contact", "company", "project", "note", "web_link"];
 
 export const DEFAULT_SETTINGS: YouSpotSettings = {
   token: "",
@@ -11,7 +11,10 @@ export const DEFAULT_SETTINGS: YouSpotSettings = {
   syncIntervalMinutes: 5,
   syncOnSave: true,
   pullEnabled: true,
-  exportTypes: Object.fromEntries(EXPORT_TYPES.map((t) => [t, true])),
+  exportTypes: {},
+  exportSpaceId: "",
+  attachments: "none",
+  selectionInitialized: false,
 };
 
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -49,7 +52,9 @@ export function loadPluginData(raw: unknown, vaultId: () => string = newVaultId)
     ...DEFAULT_SETTINGS,
     ...settings,
     exportTypes: {
-      ...DEFAULT_SETTINGS.exportTypes,
+      ...(data.version === 1 || (data.settings && !data.version)
+        ? Object.fromEntries(LEGACY_DEFAULT_TYPES.map((type) => [type, true]))
+        : {}),
       ...(isRecord(settings.exportTypes) ? settings.exportTypes : {}),
     },
   } as YouSpotSettings;
@@ -57,8 +62,13 @@ export function loadPluginData(raw: unknown, vaultId: () => string = newVaultId)
     typeof state.vaultId === "string" && state.vaultId ? state.vaultId : vaultId(),
   );
   return {
-    version: 1,
-    settings: merged,
+    version: 2,
+    settings: {
+      ...merged,
+      selectionInitialized: Boolean(
+        settings.selectionInitialized || (data.version !== 2 && data.settings),
+      ),
+    },
     state: {
       ...base,
       ...state,
@@ -72,4 +82,33 @@ export function loadPluginData(raw: unknown, vaultId: () => string = newVaultId)
 
 export function resetState(state: SyncState): SyncState {
   return emptyState(state.vaultId);
+}
+
+export function applyCapabilities(
+  settings: YouSpotSettings,
+  capabilities: ExportCapabilities,
+): void {
+  if (
+    capabilities.obsidian_version !== 1 ||
+    capabilities.archive_version !== 1 ||
+    capabilities.renderer_version !== 1
+  ) {
+    throw new Error("Update the plugin to use this export format.");
+  }
+  for (const item of capabilities.types) {
+    if (!(item.type in settings.exportTypes)) {
+      settings.exportTypes[item.type] =
+        !settings.selectionInitialized &&
+        item.default &&
+        ["document", "context"].includes(item.classification);
+    }
+  }
+  settings.selectionInitialized = true;
+  settings.capabilities = capabilities;
+  if (!settings.exportSpaceId) {
+    settings.exportSpaceId =
+      capabilities.spaces.find((space) => space.id === capabilities.active_space_id)?.id ??
+      capabilities.spaces[0]?.id ??
+      "";
+  }
 }

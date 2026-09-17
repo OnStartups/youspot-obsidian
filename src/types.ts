@@ -145,6 +145,11 @@ export interface YouSpotSettings {
   syncOnSave: boolean;
   pullEnabled: boolean;
   exportTypes: Record<string, boolean>;
+  exportSpaceId: string;
+  attachments: "none" | "available";
+  capabilities?: ExportCapabilities;
+  capabilitiesAccount?: string;
+  selectionInitialized?: boolean;
 }
 
 export interface NoteConflict {
@@ -162,6 +167,7 @@ export interface NoteState {
 }
 
 export interface ExportState {
+  projection_version?: number;
   path: string;
   type: string;
   rendered_hash: string;
@@ -169,6 +175,10 @@ export interface ExportState {
 }
 
 export interface SyncState {
+  refresh?: RefreshState;
+  refreshReport?: RefreshReport;
+  pendingWrites?: Record<string, { path: string; hash: string }>;
+  exportConflicts?: string[];
   vaultId: string;
   notes: Record<string, NoteState>;
   exports: Record<string, ExportState>;
@@ -180,7 +190,7 @@ export interface SyncState {
 }
 
 export interface PluginData {
-  version: 1;
+  version: 1 | 2;
   settings: YouSpotSettings;
   state: SyncState;
 }
@@ -188,4 +198,60 @@ export interface PluginData {
 export interface PathRules {
   syncFolder: string;
   exportFolder: string;
+}
+
+export interface ExportCapabilities {
+  obsidian_version: number;
+  archive_version: number;
+  renderer_version: number;
+  active_space_id: string | null;
+  spaces: { id: string; name: string; counts: Record<string, number> }[];
+  types: {
+    type: string;
+    label: string;
+    classification: string;
+    default: boolean;
+    fields: Record<string, string>;
+    reason: string;
+  }[];
+  incremental_types: string[];
+  legacy_default_types: string[];
+  attachment_modes: string[];
+  limits: { archive_bytes: number; records: number; assets: number };
+}
+
+export interface ExportRun {
+  id: string;
+  status: string;
+  error: string | null;
+  bytes: number | null;
+  sha256: string | null;
+  options: { space_id: string; types: string[]; attachments: string };
+  report: Record<string, unknown>;
+}
+
+export interface RefreshRequest {
+  obsidian_version: 1;
+  space_id: string;
+  types: string[];
+  attachments: "none" | "available";
+  request_key: string;
+}
+
+export interface RefreshState {
+  request: RefreshRequest;
+  apiBase: string;
+  account: string;
+  root: string;
+  runId?: string;
+  releasePending?: boolean;
+}
+
+export interface RefreshReport {
+  runId: string;
+  written: number;
+  originals: number;
+  assets: number;
+  conflicts: { path: string; reason: string }[];
+  coverage: Record<string, unknown>;
 }

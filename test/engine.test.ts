@@ -1,71 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { ApiClient, type HttpPort, type HttpRequest } from "../src/api";
 import { SyncEngine } from "../src/sync/engine";
-import { splitFrontmatter } from "../src/sync/frontmatter";
 import { DEFAULT_SETTINGS, emptyState } from "../src/sync/state";
 import type { ChangeObject, PluginData, PushRequest } from "../src/types";
-import type { FileCache, FileMeta, VaultPort } from "../src/vault-port";
-
-class MemoryVault implements VaultPort {
-  files = new Map<string, { content: string; mtime: number }>();
-  caches = new Map<string, FileCache>();
-  links = new Map<string, string[]>();
-  writes: string[] = [];
-  trashed: string[] = [];
-  renames: [string, string][] = [];
-  stamps: [string, string][] = [];
-
-  add(path: string, content: string, cache?: FileCache, links: string[] = []) {
-    this.files.set(path, { content, mtime: 1000 });
-    this.caches.set(path, cache ?? { frontmatter: null, tags: [] });
-    this.links.set(path, links);
-  }
-  vaultName() {
-    return "TestVault";
-  }
-  listMarkdown(): FileMeta[] {
-    return [...this.files].map(([path, f]) => ({ path, basename: path, mtime: f.mtime }));
-  }
-  stat(path: string) {
-    const f = this.files.get(path);
-    return f ? { path, basename: path, mtime: f.mtime } : null;
-  }
-  async read(path: string) {
-    return this.files.get(path)?.content ?? "";
-  }
-  async write(path: string, content: string) {
-    this.writes.push(path);
-    this.files.set(path, { content, mtime: 2000 });
-  }
-  async rename(from: string, to: string) {
-    this.renames.push([from, to]);
-    const f = this.files.get(from);
-    if (f) {
-      this.files.delete(from);
-      this.files.set(to, f);
-    }
-  }
-  async trash(path: string) {
-    this.trashed.push(path);
-    this.files.delete(path);
-  }
-  async ensureFolder() {}
-  cache(path: string) {
-    return this.caches.get(path) ?? null;
-  }
-  resolvedLinks(path: string) {
-    return this.links.get(path) ?? [];
-  }
-  async stampFrontmatter(path: string, key: string, value: string) {
-    this.stamps.push([path, value]);
-    const f = this.files.get(path);
-    if (!f) return;
-    const { body } = splitFrontmatter(f.content);
-    f.content = `---\n${key}: ${value}\n---\n${body}`;
-    const cache = this.caches.get(path) ?? { frontmatter: null, tags: [] };
-    cache.frontmatter = { ...cache.frontmatter, [key]: value };
-  }
-}
+import { MemoryVault } from "./memory-vault";
 
 type Handler = (req: HttpRequest, body: unknown) => { status: number; json: unknown };
 
@@ -96,6 +34,7 @@ function setup(overrides: Partial<PluginData["settings"]> = {}) {
       token: "mcp_t",
       syncFolder: "Brain",
       syncOnSave: false,
+      exportTypes: { contact: true, company: true, project: true, note: true, web_link: true },
       ...overrides,
     },
     state: emptyState("vault1"),
@@ -115,8 +54,6 @@ function setup(overrides: Partial<PluginData["settings"]> = {}) {
     },
     notify: (m) => notices.push(m),
     now: () => 5000,
-    // Obsidian passes window's timers; here plain globals are enough, and
-    // the engine never reaches for either itself.
     setTimer: (fn, ms) => setTimeout(fn, ms) as unknown as number,
     clearTimer: (id) => clearTimeout(id),
   });
@@ -146,6 +83,28 @@ function okPush(http: FakeHttp, seen: PushRequest[]) {
 }
 
 describe("SyncEngine push", () => {
+  test("a moved managed export cannot be pushed as an editable original", async () => {
+    const { vault, http, engine, data } = setup();
+    const seen: PushRequest[] = [];
+    okPush(http, seen);
+    const path = "Brain/Moved export.md";
+    vault.add(path, "Managed projection with local edits", {
+      frontmatter: { youspot_id: "company_1", youspot_managed: true },
+      tags: [],
+    });
+    data.state.exports.company_1 = {
+      path,
+      type: "company",
+      rendered_hash: "previous",
+      updated_at: "",
+      projection_version: 1,
+    };
+    await engine.pushNote(path, true);
+    expect(seen).toEqual([]);
+    expect(await vault.read(path)).toBe("Managed projection with local edits");
+    expect(data.state.notes[path]).toBeUndefined();
+  });
+
   test("pushes a note, stamps its id, and does not push again unchanged", async () => {
     const { vault, http, engine, data } = setup();
     const seen: PushRequest[] = [];
@@ -418,7 +377,7 @@ describe("SyncEngine pull", () => {
     engine.stop();
   });
 
-  test("tombstones trash the export and renames follow the object", async () => {
+  test("tombstones trash unchanged legacy exports while title changes keep the path", async () => {
     const { vault, http, engine, data } = setup();
     let call = 0;
     http.on("GET", "/api/obsidian/changes", () => {
@@ -431,11 +390,10 @@ describe("SyncEngine pull", () => {
     });
     await engine.pull();
     await engine.pull();
-    expect(vault.renames).toEqual([
-      ["Brain/YouSpot/Contacts/Jane.md", "Brain/YouSpot/Contacts/Jane Doe.md"],
-    ]);
+    expect(vault.renames).toEqual([]);
+    expect(await vault.read("Brain/YouSpot/Contacts/Jane.md")).toContain("Jane Doe");
     await engine.pull();
-    expect(vault.trashed).toEqual(["Brain/YouSpot/Contacts/Jane Doe.md"]);
+    expect(vault.trashed).toEqual(["Brain/YouSpot/Contacts/Jane.md"]);
     expect(data.state.exports.per_1).toBeUndefined();
   });
 

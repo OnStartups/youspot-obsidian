@@ -41,18 +41,34 @@ Your vault is the source of truth for its own notes, but never silently. If a no
 
 There is no automatic merging.
 
+## Full Brain export (0.3.0)
+
+Requires Obsidian 1.13.0 or later and the backend export adapter. Press **Check** or **Reload options** in settings, choose an owned Brain, content types and attachment mode, then run **Full refresh Brain export**. The backend discovers selectable types and approved fields from the same registry as web archives. Existing users keep their selections; newly supported types stay off until selected.
+
+A full refresh captures the entire selection, independent of the legacy incremental watermark. Documents use the shared archive renderer, including full stored bodies, approved fields, directed relationships and the same coverage limits. Fresh files use collision-safe paths under `<sync folder>/YouSpot/documents/`. Existing safe managed paths are retained when titles change. Links resolve across the complete inventory, including original notes already present in this vault. Notes from other vaults are included normally.
+
+**Include available attachments** downloads captured bytes using short-lived private URLs. The account bearer is sent only to the configured backend, never to the download host. Attachments are verified by SHA-256 and stored locally under `assets/`. Text-only mode and unavailable bytes appear in the coverage report. Arbitrary attachment uploads remain outside this feature.
+
+The plugin compares actual file bytes with the last successful exported hash before overwriting. Local edits and unmanaged files are preserved, with conflicts listed in **Last refresh report**. Restore the previous exported bytes to accept a refresh, or copy your edits to a separate note and delete the managed file before refreshing. Deselecting a type does not remove its files. Resetting note sync preserves managed export hashes and pending refresh progress.
+
+Refreshes run on the backend queue. A queued refresh continues on the next background sync; **Continue refresh** checks sooner when the interval is off. Progress is saved before file writes, so an interrupted refresh resumes using the same captured archive. Completed delivery releases its private archive; unfinished runs expire after seven days. Web and plugin exports share the one-active-run and three-retained-run account limits. The current envelope is 20,000 records, 2,000 attachments, 20 MiB per attachment and 50 MiB total archive content. The ZIP is bounded in memory; NDJSON records are decoded one line at a time.
+
+**Background sync remains the legacy incremental path.** It continues syncing editable original notes and unconverted legacy exports. Once a managed file has received the richer full export, legacy rendering and tombstones cannot downgrade or delete it. Run another full refresh to update these files, including field-only and relationship-only edits. Full refresh does not automatically remove documents deleted on the server. Durable acknowledged incremental baselines and complete deletion reconciliation remain separate work.
+
+The last refresh report includes local conflicts plus the archive's missing content, exclusions and unavailable attachments. Review it before treating the export as complete. Files are local exports, not a promise of full account backup or archive restoration.
+
 ## Commands
 
-| Command                           | Does                                                         |
-| --------------------------------- | ------------------------------------------------------------ |
-| Sync now                          | Push pending notes, then pull Brain changes                  |
-| Push this note                    | Push the active note immediately                             |
-| Push this note (overwrite server) | Same, but win over an edit made in YouSpot                   |
-| Pull Brain now                    | Pull only                                                    |
-| Pull server version of this note  | Write the YouSpot copy beside the note                       |
-| Reconcile folder                  | Rescan the folder against local state and the server         |
-| Open in YouSpot                   | Open the active note's object page                           |
-| Reset sync state                  | Forget local bookkeeping; the next sync re-pushes the folder |
+| Command                           | Does                                                     |
+| --------------------------------- | -------------------------------------------------------- |
+| Sync now                          | Push pending notes, then pull Brain changes              |
+| Push this note                    | Push the active note immediately                         |
+| Push this note (overwrite server) | Same, but win over an edit made in YouSpot               |
+| Pull Brain now                    | Pull only                                                |
+| Pull server version of this note  | Write the YouSpot copy beside the note                   |
+| Reconcile folder                  | Rescan the folder against local state and the server     |
+| Open in YouSpot                   | Open the active note's object page                       |
+| Reset sync state                  | Re-scan notes while preserving managed export protection |
 
 ## What the plugin accesses
 

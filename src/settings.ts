@@ -9,16 +9,13 @@ import {
 import { ApiError } from "./api";
 import { FolderSuggest } from "./folder-suggest";
 import type YouSpotPlugin from "./main";
-import { DEFAULT_SETTINGS, EXPORT_TYPES } from "./sync/state";
-import { pluralFolder } from "./sync/paths";
+import { DEFAULT_SETTINGS, applyCapabilities } from "./sync/state";
 import type { YouSpotSettings } from "./types";
 
 export { DEFAULT_SETTINGS };
 
 const PLUGIN_PAGE = "https://community.obsidian.md/plugins/youspot";
 
-/** Where the token actually sits, asked of the vault rather than assumed —
- *  configDir is not always `.obsidian`. */
 function gitignoreLine(app: App): string {
   return `${app.vault.configDir}/plugins/youspot/data.json`;
 }
@@ -54,16 +51,6 @@ class ConfirmModal extends Modal {
   }
 }
 
-/**
- * Declarative settings (1.13.0+). Describing the settings instead of drawing
- * them is what puts them in Obsidian's settings search, so someone looking
- * for "sync folder" finds it without knowing the plugin is called YouSpot.
- *
- * Values are read and written through getControlValue/setControlValue below,
- * which is why every `key` is a field of YouSpotSettings. The handful of rows
- * that are not a plain value — the token, the folder picker, the warning —
- * use `render` and draw themselves.
- */
 export class YouSpotSettingTab extends PluginSettingTab {
   constructor(
     app: App,
@@ -78,7 +65,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
 
   override getControlValue(key: string): unknown {
     if (key.startsWith("export:")) {
-      return this.prefs.exportTypes[key.slice("export:".length)] !== false;
+      return this.prefs.exportTypes[key.slice("export:".length)] === true;
     }
     return this.prefs[key as keyof YouSpotSettings];
   }
@@ -174,11 +161,128 @@ export class YouSpotSettingTab extends PluginSettingTab {
       },
       {
         type: "group",
+        heading: "Full Brain export",
+        items: [
+          {
+            name: "Discover export options",
+            desc: "Load supported types, fields and limits from your account. Newly supported types stay off until selected.",
+            render: (setting) => {
+              setting.addButton((button) =>
+                button.setButtonText("Reload options").onClick(async () => {
+                  try {
+                    const me = await this.plugin.api.me();
+                    applyCapabilities(this.prefs, await this.plugin.api.capabilities());
+                    this.prefs.capabilitiesAccount = me.email;
+                    await this.plugin.saveSettings();
+                    this.update();
+                  } catch (error) {
+                    new Notice(String(error));
+                  }
+                }),
+              );
+            },
+          },
+          {
+            name: "Brain",
+            desc: "Full refresh exports one Brain you own. Background note sync still uses your active Brain.",
+            render: (setting) => {
+              setting.addDropdown((dropdown) => {
+                for (const space of this.prefs.capabilities?.spaces ?? [])
+                  dropdown.addOption(space.id, space.name);
+                dropdown.setValue(this.prefs.exportSpaceId).onChange(async (value) => {
+                  this.prefs.exportSpaceId = value;
+                  await this.plugin.saveSettings();
+                });
+              });
+            },
+          },
+          {
+            name: "Attachments",
+            render: (setting) => {
+              setting.addDropdown((dropdown) =>
+                dropdown
+                  .addOption("none", "Text only")
+                  .addOption("available", "Include available attachments")
+                  .setValue(this.prefs.attachments)
+                  .onChange(async (value) => {
+                    this.prefs.attachments = value === "available" ? "available" : "none";
+                    await this.plugin.saveSettings();
+                  }),
+              );
+            },
+          },
+          {
+            name: "Full refresh",
+            desc: "Capture all selected content using the shared Brain exporter. Existing originals and local edits are preserved. Rich exports update on full refresh; background sync does not replace them. Full refresh uses the same selection limits as downloadable Brain archives.",
+            render: (setting) => {
+              setting.addButton((button) =>
+                button
+                  .setButtonText(this.plugin.state.refresh ? "Continue refresh" : "Full refresh")
+                  .onClick(async () => {
+                    await this.plugin.engine.refresh();
+                    this.update();
+                  }),
+              );
+              if (this.plugin.state.refresh)
+                setting.addButton((button) =>
+                  button.setButtonText("Cancel refresh").onClick(async () => {
+                    try {
+                      await this.plugin.engine.cancelRefresh();
+                      this.update();
+                    } catch (error) {
+                      new Notice(String(error));
+                    }
+                  }),
+                );
+            },
+          },
+          {
+            name: "Last refresh report",
+            render: (setting) => {
+              const report = this.plugin.state.refreshReport;
+              if (!report) {
+                setting.setDesc("No full refresh completed yet.");
+                return;
+              }
+              setting.setDesc(
+                `Documents written: ${report.written}. Originals kept: ${report.originals}. Attachments: ${report.assets}. Conflicts: ${report.conflicts.length}.`,
+              );
+              for (const conflict of report.conflicts)
+                setting.descEl.createEl("p", { text: `${conflict.path}: ${conflict.reason}` });
+              setting.descEl.createEl("p", {
+                text: `${Number(report.coverage.assets_missing ?? 0)} unavailable attachments; ${Number(report.coverage.assets_excluded ?? 0)} attachments excluded by your selection; ${Number(report.coverage.omitted_relationships ?? 0)} relationships outside the selection.`,
+              });
+              const warnings = report.coverage.warnings as Record<string, number> | undefined;
+              for (const [code, count] of Object.entries(warnings ?? {}))
+                setting.descEl.createEl("p", { text: `${code.replaceAll("_", " ")}: ${count}.` });
+              const exclusions = report.coverage.excluded_types as
+                | Record<string, { count: number; reason: string }>
+                | undefined;
+              for (const [type, item] of Object.entries(exclusions ?? {}))
+                setting.descEl.createEl("p", {
+                  text: `${type.replaceAll("_", " ")}: ${item.count} excluded. ${item.reason}`,
+                });
+            },
+          },
+        ],
+      },
+      {
+        type: "group",
         heading: "Exported types",
-        items: EXPORT_TYPES.map((type) => ({
-          name: pluralFolder(type),
-          control: { type: "toggle" as const, key: `export:${type}` },
-        })),
+        items: (this.prefs.capabilities?.types ?? [])
+          .filter((item) => ["document", "context"].includes(item.classification))
+          .map((item) => ({
+            name: item.label,
+            desc: [
+              item.reason,
+              Object.keys(item.fields).length
+                ? `Fields: ${Object.keys(item.fields).join(", ")}.`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" "),
+            control: { type: "toggle" as const, key: `export:${item.type}` },
+          })),
       },
       {
         type: "group",
@@ -193,7 +297,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
           },
           {
             name: "Reset sync state",
-            desc: "Forget what has been pushed and pulled. The next sync re-pushes every note in the folder.",
+            desc: "Re-scan original notes. Managed export hashes and pending refresh progress are kept to protect local files.",
             render: (setting) => {
               setting.addButton((b) =>
                 b
@@ -203,7 +307,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
                     new ConfirmModal(
                       this.app,
                       "Reset YouSpot sync state?",
-                      "Notes in YouSpot are kept. The plugin forgets its local bookkeeping and re-syncs everything.",
+                      "Notes in YouSpot are kept. Original notes will be re-scanned; existing managed exports remain protected.",
                       () => void this.plugin.resetSyncState(),
                     ).open(),
                   ),
@@ -249,6 +353,9 @@ export class YouSpotSettingTab extends PluginSettingTab {
         try {
           const me = await this.plugin.api.me();
           this.plugin.accountEmail = me.email;
+          applyCapabilities(this.prefs, await this.plugin.api.capabilities());
+          this.prefs.capabilitiesAccount = me.email;
+          await this.plugin.saveSettings();
           this.plugin.engine.resume();
           new Notice(
             `YouSpot: connected as ${me.email} (${me.brain_count} objects in your Brain).`,

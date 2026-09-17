@@ -6,6 +6,7 @@ import { YouSpotSettingTab } from "./settings";
 import { formatStatus } from "./status";
 import { SyncEngine } from "./sync/engine";
 import { isSyncable } from "./sync/paths";
+import { discoverExports } from "./sync/refresh";
 import { loadPluginData } from "./sync/state";
 import type { PluginData } from "./types";
 import { ObsidianVault } from "./vault-obsidian";
@@ -15,9 +16,10 @@ export default class YouSpotPlugin extends Plugin {
   api!: ApiClient;
   engine!: SyncEngine;
   accountEmail: string | null = null;
+  private settingsTab!: YouSpotSettingTab;
   private statusEl!: HTMLElement;
   private intervalId: number | null = null;
-  private persistTimer: number | null = null;
+  private saveTail: Promise<void> = Promise.resolve();
 
   get prefs() {
     return this.data.settings;
@@ -46,7 +48,8 @@ export default class YouSpotPlugin extends Plugin {
       clearTimer: (id) => window.clearTimeout(id),
     });
 
-    this.addSettingTab(new YouSpotSettingTab(this.app, this));
+    this.settingsTab = new YouSpotSettingTab(this.app, this);
+    this.addSettingTab(this.settingsTab);
     this.statusEl = this.addStatusBarItem();
     this.statusEl.addClass("youspot-status");
     this.statusEl.addEventListener("click", () => void this.engine.syncNow());
@@ -64,10 +67,7 @@ export default class YouSpotPlugin extends Plugin {
 
   override onunload(): void {
     this.engine.stop();
-    if (this.persistTimer) {
-      window.clearTimeout(this.persistTimer);
-      void this.saveData(this.data);
-    }
+    void this.persist();
   }
 
   private async boot(): Promise<void> {
@@ -76,6 +76,14 @@ export default class YouSpotPlugin extends Plugin {
     try {
       const me = await this.api.me();
       this.accountEmail = me.email;
+      await discoverExports({
+        vault: new ObsidianVault(this.app),
+        api: this.api,
+        data: this.data,
+        persist: () => this.persist(),
+        notify: (message) => new Notice(message),
+      });
+      this.settingsTab.update();
     } catch {
       this.accountEmail = null;
     }
@@ -110,6 +118,14 @@ export default class YouSpotPlugin extends Plugin {
       id: "sync-now",
       name: "Sync now",
       callback: () => void this.syncNow(),
+    });
+    this.addCommand({
+      id: "refresh-brain-export",
+      name: "Full refresh Brain export",
+      callback: async () => {
+        await this.engine.refresh();
+        this.settingsTab.update();
+      },
     });
     this.addCommand({
       id: "pull-brain",
@@ -207,23 +223,21 @@ export default class YouSpotPlugin extends Plugin {
 
   async resetSyncState(): Promise<void> {
     this.engine.resetState();
-    await this.saveData(this.data);
+    await this.persist();
     this.renderStatus();
     new Notice("YouSpot: sync state reset.");
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData(this.data);
+    await this.persist();
     this.armInterval();
     this.renderStatus();
   }
 
-  private persist(): void {
-    if (this.persistTimer) window.clearTimeout(this.persistTimer);
-    this.persistTimer = window.setTimeout(() => {
-      this.persistTimer = null;
-      void this.saveData(this.data);
-    }, 500);
+  private persist(): Promise<void> {
+    const snapshot: unknown = JSON.parse(JSON.stringify(this.data));
+    this.saveTail = this.saveTail.catch(() => undefined).then(() => this.saveData(snapshot));
+    return this.saveTail;
   }
 
   private armInterval(): void {

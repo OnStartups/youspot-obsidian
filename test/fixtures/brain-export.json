@@ -1,0 +1,211 @@
+{
+  "records": [
+    {
+      "id": "obj_94d4998a9e0a86916bb0e3af7f1ad6cf",
+      "type": "note",
+      "title": "Shared title",
+      "body": "An original **Markdown** note.",
+      "body_format": "markdown",
+      "body_source": "fixture",
+      "url": null,
+      "source": "fixture",
+      "created_at": "2026-09-16T00:00:00+00:00",
+      "updated_at": "2026-09-16T00:00:00+00:00",
+      "fields": {},
+      "field_sources": {},
+      "alternate_values": [],
+      "context": [],
+      "tags": ["fixture"],
+      "warnings": [],
+      "assets": [],
+      "path": "documents/note/Shared title--obj_94d4998a9e0a86916bb0e3af7f1ad6cf.md"
+    },
+    {
+      "id": "obj_dcc534f21325048ac0a76c6cde2a3adc",
+      "type": "company",
+      "title": "Shared title",
+      "body": "Private company context.",
+      "body_format": "markdown",
+      "body_source": "fixture",
+      "url": null,
+      "source": "fixture",
+      "created_at": "2026-09-16T00:00:00+00:00",
+      "updated_at": "2026-09-16T00:00:00+00:00",
+      "fields": {
+        "category": "Partner",
+        "employee_count": 0
+      },
+      "field_sources": {},
+      "alternate_values": [],
+      "context": [],
+      "tags": ["fixture"],
+      "warnings": [],
+      "assets": [],
+      "path": "documents/company/Shared title--obj_dcc534f21325048ac0a76c6cde2a3adc.md"
+    },
+    {
+      "id": "obj_997f8aa83331249fe7f66a05acf04ab5",
+      "type": "email_message",
+      "title": "Email with attachment",
+      "body": "<p>Complete email <strong>body</strong>.</p>",
+      "body_format": "html",
+      "body_source": "fixture",
+      "url": null,
+      "source": "fixture",
+      "created_at": "2026-09-16T00:00:00+00:00",
+      "updated_at": "2026-09-16T00:00:00+00:00",
+      "fields": {
+        "sender": "friend@example.invalid"
+      },
+      "field_sources": {},
+      "alternate_values": [],
+      "context": [],
+      "tags": ["fixture"],
+      "warnings": [],
+      "assets": [
+        {
+          "id": "asset_1",
+          "filename": "sample.txt",
+          "media_type": "text/plain",
+          "status": "captured",
+          "path": "assets/asset_1/sample.txt",
+          "bytes": 17,
+          "sha256": "d3c596beff3569ad0436f52ac241a1a38f17c1f97c5c253b59e5264a28718706",
+          "record_id": "obj_997f8aa83331249fe7f66a05acf04ab5"
+        }
+      ],
+      "path": "documents/email_message/Email with attachment--obj_997f8aa83331249fe7f66a05acf04ab5.md"
+    },
+    {
+      "id": "obj_ac5942cf3417e3005122b334d5b45fef",
+      "type": "linkedin_post",
+      "title": "Long post",
+      "body": "A complete stored post, beyond its graph excerpt.",
+      "body_format": "text",
+      "body_source": "fixture",
+      "url": null,
+      "source": "fixture",
+      "created_at": "2026-09-16T00:00:00+00:00",
+      "updated_at": "2026-09-16T00:00:00+00:00",
+      "fields": {
+        "total_reaction_count": 0
+      },
+      "field_sources": {},
+      "alternate_values": [],
+      "context": [],
+      "tags": ["fixture"],
+      "warnings": [],
+      "assets": [],
+      "path": "documents/linkedin_post/Long post--obj_ac5942cf3417e3005122b334d5b45fef.md"
+    },
+    {
+      "id": "obj_955ff723020e7b3b071dcde7c235ee9f",
+      "type": "event",
+      "title": "Date-only event",
+      "body": "Meet at the office.",
+      "body_format": "markdown",
+      "body_source": "fixture",
+      "url": null,
+      "source": "fixture",
+      "created_at": "2026-09-16T00:00:00+00:00",
+      "updated_at": "2026-09-16T00:00:00+00:00",
+      "fields": {
+        "start": "2026-10-19",
+        "all_day": true
+      },
+      "field_sources": {},
+      "alternate_values": [],
+      "context": [],
+      "tags": ["fixture"],
+      "warnings": [],
+      "assets": [],
+      "path": "documents/event/Date-only event--obj_955ff723020e7b3b071dcde7c235ee9f.md"
+    },
+    {
+      "id": "obj_b3c85db6483b09dc7abdeb9d0a0283b4",
+      "type": "note",
+      "title": "Other vault note",
+      "body": "A note from a different vault.",
+      "body_format": "markdown",
+      "body_source": "fixture",
+      "url": null,
+      "source": "fixture",
+      "created_at": "2026-09-16T00:00:00+00:00",
+      "updated_at": "2026-09-16T00:00:00+00:00",
+      "fields": {},
+      "field_sources": {},
+      "alternate_values": [],
+      "context": [],
+      "tags": ["fixture"],
+      "warnings": [],
+      "assets": [],
+      "path": "documents/note/Other vault note--obj_b3c85db6483b09dc7abdeb9d0a0283b4.md"
+    }
+  ],
+  "relationships": [
+    {
+      "id": "edge",
+      "type": "related_to",
+      "from": "obj_94d4998a9e0a86916bb0e3af7f1ad6cf",
+      "to": "obj_b3c85db6483b09dc7abdeb9d0a0283b4",
+      "created_at": "2026-09-16T00:00:00+00:00"
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset_1",
+      "filename": "sample.txt",
+      "media_type": "text/plain",
+      "status": "captured",
+      "path": "assets/asset_1/sample.txt",
+      "bytes": 17,
+      "sha256": "d3c596beff3569ad0436f52ac241a1a38f17c1f97c5c253b59e5264a28718706",
+      "record_id": "obj_997f8aa83331249fe7f66a05acf04ab5"
+    }
+  ],
+  "identities": [
+    {
+      "id": "obj_94d4998a9e0a86916bb0e3af7f1ad6cf",
+      "object_id": "fixture_1"
+    },
+    {
+      "id": "obj_dcc534f21325048ac0a76c6cde2a3adc",
+      "object_id": "fixture_2"
+    },
+    {
+      "id": "obj_997f8aa83331249fe7f66a05acf04ab5",
+      "object_id": "fixture_3"
+    },
+    {
+      "id": "obj_ac5942cf3417e3005122b334d5b45fef",
+      "object_id": "fixture_4"
+    },
+    {
+      "id": "obj_955ff723020e7b3b071dcde7c235ee9f",
+      "object_id": "fixture_5"
+    },
+    {
+      "id": "obj_b3c85db6483b09dc7abdeb9d0a0283b4",
+      "object_id": "fixture_6"
+    }
+  ],
+  "files": {
+    "assets/asset_1/sample.txt": "attachment bytes\n",
+    "documents/note/Shared title--obj_94d4998a9e0a86916bb0e3af7f1ad6cf.md": "---\nid: \"obj_94d4998a9e0a86916bb0e3af7f1ad6cf\"\ntype: \"note\"\nsource: \"fixture\"\ncreated_at: \"2026-09-16T00:00:00+00:00\"\nupdated_at: \"2026-09-16T00:00:00+00:00\"\ntags: [\"fixture\"]\n---\n\n# Shared title\n\n## Content\n\nAn original **Markdown** note.\n\n## Relationships\n\n- Outgoing related\\_to: [Other vault note](Other%20vault%20note--obj_b3c85db6483b09dc7abdeb9d0a0283b4.md)\n\n",
+    "documents/company/Shared title--obj_dcc534f21325048ac0a76c6cde2a3adc.md": "---\nid: \"obj_dcc534f21325048ac0a76c6cde2a3adc\"\ntype: \"company\"\nsource: \"fixture\"\ncreated_at: \"2026-09-16T00:00:00+00:00\"\nupdated_at: \"2026-09-16T00:00:00+00:00\"\ntags: [\"fixture\"]\n---\n\n# Shared title\n\n## Content\n\nPrivate company context.\n\n## Fields\n\n### Category\n\nPartner\n\n### Employee count\n\n0\n\n",
+    "documents/email_message/Email with attachment--obj_997f8aa83331249fe7f66a05acf04ab5.md": "---\nid: \"obj_997f8aa83331249fe7f66a05acf04ab5\"\ntype: \"email_message\"\nsource: \"fixture\"\ncreated_at: \"2026-09-16T00:00:00+00:00\"\nupdated_at: \"2026-09-16T00:00:00+00:00\"\ntags: [\"fixture\"]\n---\n\n# Email with attachment\n\n## Content\n\nComplete email **body**.\n\n## Fields\n\n### Sender\n\nfriend@example\\.invalid\n\n## Attachments\n\n- [sample\\.txt](../../assets/asset_1/sample.txt)\n",
+    "documents/linkedin_post/Long post--obj_ac5942cf3417e3005122b334d5b45fef.md": "---\nid: \"obj_ac5942cf3417e3005122b334d5b45fef\"\ntype: \"linkedin_post\"\nsource: \"fixture\"\ncreated_at: \"2026-09-16T00:00:00+00:00\"\nupdated_at: \"2026-09-16T00:00:00+00:00\"\ntags: [\"fixture\"]\n---\n\n# Long post\n\n## Content\n\nA complete stored post, beyond its graph excerpt\\.\n\n## Fields\n\n### Total reaction count\n\n0\n\n",
+    "documents/event/Date-only event--obj_955ff723020e7b3b071dcde7c235ee9f.md": "---\nid: \"obj_955ff723020e7b3b071dcde7c235ee9f\"\ntype: \"event\"\nsource: \"fixture\"\ncreated_at: \"2026-09-16T00:00:00+00:00\"\nupdated_at: \"2026-09-16T00:00:00+00:00\"\ntags: [\"fixture\"]\n---\n\n# Date\\-only event\n\n## Content\n\nMeet at the office.\n\n## Fields\n\n### Start\n\n2026\\-10\\-19\n\n### All day\n\ntrue\n\n",
+    "documents/note/Other vault note--obj_b3c85db6483b09dc7abdeb9d0a0283b4.md": "---\nid: \"obj_b3c85db6483b09dc7abdeb9d0a0283b4\"\ntype: \"note\"\nsource: \"fixture\"\ncreated_at: \"2026-09-16T00:00:00+00:00\"\nupdated_at: \"2026-09-16T00:00:00+00:00\"\ntags: [\"fixture\"]\n---\n\n# Other vault note\n\n## Content\n\nA note from a different vault.\n\n## Relationships\n\n- Incoming related\\_to: [Shared title](Shared%20title--obj_94d4998a9e0a86916bb0e3af7f1ad6cf.md)\n\n"
+  },
+  "report": {
+    "records": 6,
+    "relationships": 1,
+    "warnings": {},
+    "excluded_types": {},
+    "assets_captured": 1,
+    "assets_missing": 0,
+    "assets_excluded": 0,
+    "partial": false
+  }
+}

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { planPull } from "../src/sync/pull";
-import { DEFAULT_SETTINGS, emptyState } from "../src/sync/state";
+import { DEFAULT_SETTINGS as EMPTY_SETTINGS, emptyState } from "../src/sync/state";
 import type { ChangeObject, Tombstone } from "../src/types";
+
+const DEFAULT_SETTINGS = {
+  ...EMPTY_SETTINGS,
+  exportTypes: { contact: true, company: true, note: true },
+};
 
 const rules = { syncFolder: "Brain", exportFolder: "YouSpot" };
 
@@ -34,7 +39,7 @@ describe("planPull", () => {
       previousPath: null,
     });
   });
-  test("skips when the rendered content is unchanged", async () => {
+  test("unchanged rendering is still checked against actual local bytes", async () => {
     const state = emptyState("v");
     const first = await planPull([obj({})], [], state, DEFAULT_SETTINGS, rules);
     const write = first.actions[0];
@@ -46,9 +51,10 @@ describe("planPull", () => {
       updated_at: "",
     };
     const second = await planPull([obj({})], [], state, DEFAULT_SETTINGS, rules);
-    expect(second.actions).toHaveLength(0);
+    expect(second.actions).toHaveLength(1);
+    expect(second.actions[0]).toMatchObject({ hash: write.hash });
   });
-  test("renames when the name changed", async () => {
+  test("keeps a managed path when the title changes", async () => {
     const state = emptyState("v");
     state.exports.per_1 = {
       path: "Brain/YouSpot/Contacts/Jane.md",
@@ -59,8 +65,8 @@ describe("planPull", () => {
     const plan = await planPull([obj({ name: "Jane Doe" })], [], state, DEFAULT_SETTINGS, rules);
     expect(plan.actions[0]).toMatchObject({
       kind: "write",
-      path: "Brain/YouSpot/Contacts/Jane Doe.md",
-      previousPath: "Brain/YouSpot/Contacts/Jane.md",
+      path: "Brain/YouSpot/Contacts/Jane.md",
+      previousPath: null,
     });
   });
   test("collisions within one batch get id suffixes", async () => {
@@ -101,7 +107,7 @@ describe("planPull", () => {
     if (jane?.kind !== "write") throw new Error("expected write");
     expect(jane.content).toContain("[[Brain/YouSpot/Companies/Acme|Acme]]");
   });
-  test("vault-origin objects are skipped and server edits recorded", async () => {
+  test("current originals are skipped, while another vault note is exported", async () => {
     const state = emptyState("v");
     state.notes["Brain/a.md"] = {
       youspot_id: "note_1",
@@ -120,7 +126,8 @@ describe("planPull", () => {
       DEFAULT_SETTINGS,
       rules,
     );
-    expect(plan.actions).toHaveLength(0);
+    expect(plan.actions).toHaveLength(1);
+    expect(plan.actions[0]?.objectId).toBe("note_2");
     expect(plan.serverEdited).toEqual(["note_1"]);
   });
   test("disabled types are ignored", async () => {

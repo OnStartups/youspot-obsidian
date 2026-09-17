@@ -23,7 +23,7 @@ export interface PullPlan {
 }
 
 function typeEnabled(settings: YouSpotSettings, type: string): boolean {
-  return settings.exportTypes[type] !== false;
+  return settings.exportTypes[type] === true;
 }
 
 export async function planPull(
@@ -39,11 +39,17 @@ export async function planPull(
 
   const included: ChangeObject[] = [];
   for (const obj of objects) {
-    if (obj.origin === "vault" || vaultNotes.has(obj.object_id)) {
+    if (
+      vaultNotes.has(obj.object_id) ||
+      (obj.obsidian?.vault_id === state.vaultId &&
+        obj.obsidian.path &&
+        vaultNotes.get(obj.object_id) === obj.obsidian.path)
+    ) {
       if (obj.server_edited) plan.serverEdited.push(obj.object_id);
       continue;
     }
-    if (typeEnabled(settings, obj.type)) included.push(obj);
+    if (!state.exports[obj.object_id]?.projection_version && typeEnabled(settings, obj.type))
+      included.push(obj);
   }
 
   const assigned = new Map<string, string>();
@@ -52,13 +58,15 @@ export async function planPull(
     if (!included.some((o) => o.object_id === id)) taken.add(entry.path);
   }
   for (const obj of included) {
-    const path = exportPath(rules, obj.type, obj.name, obj.object_id, taken);
+    const path =
+      state.exports[obj.object_id]?.path ??
+      exportPath(rules, obj.type, obj.name, obj.object_id, taken);
     assigned.set(obj.object_id, path);
     taken.add(path);
   }
 
   const resolvePath = (objectId: string): string | null =>
-    assigned.get(objectId) ?? state.exports[objectId]?.path ?? null;
+    vaultNotes.get(objectId) ?? assigned.get(objectId) ?? state.exports[objectId]?.path ?? null;
 
   const rendered = await Promise.all(
     included.map(async (obj) => {
@@ -71,7 +79,6 @@ export async function planPull(
     const path = assigned.get(obj.object_id);
     if (!path) continue;
     const existing = state.exports[obj.object_id];
-    if (existing && existing.path === path && existing.rendered_hash === hash) continue;
     plan.actions.push({
       kind: "write",
       objectId: obj.object_id,
@@ -86,7 +93,8 @@ export async function planPull(
 
   for (const tomb of tombstones) {
     const exported = state.exports[tomb.object_id];
-    if (exported) {
+    if (exported?.projection_version) continue;
+    if (exported && typeEnabled(settings, exported.type)) {
       plan.actions.push({ kind: "trash", objectId: tomb.object_id, path: exported.path });
       continue;
     }

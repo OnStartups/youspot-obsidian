@@ -10,6 +10,10 @@ export const obsidianHttp: HttpPort = {
       body: req.body,
       throw: false,
     });
-    return { status: res.status, text: res.text };
+    return {
+      status: res.status,
+      text: req.binary ? "" : res.text,
+      bytes: req.binary ? res.arrayBuffer : undefined,
+    };
   },
 };

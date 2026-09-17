@@ -12,8 +12,13 @@ export interface FileCache {
 export interface VaultPort {
   vaultName(): string;
   listMarkdown(): FileMeta[];
+  listPaths(): string[];
   stat(path: string): FileMeta | null;
   read(path: string): Promise<string>;
+  exists(path: string): boolean;
+  readBinary(path: string): Promise<ArrayBuffer>;
+  createBinary(path: string, bytes: ArrayBuffer): Promise<void>;
+  writeGuarded(path: string, content: string, previous: string | null): Promise<boolean>;
   write(path: string, content: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   trash(path: string): Promise<void>;
