@@ -63,14 +63,14 @@ time. There is no analytics and no telemetry, and nothing is sent anywhere else.
 by default, and to no other host. Changing that field points the plugin at your own server
 instead. Each call carries your token and nothing else identifying.
 
-| Request                              | When it happens                                     |
-| ------------------------------------ | --------------------------------------------------- |
-| `GET /api/obsidian/me`               | Checking the token, on the settings screen           |
-| `POST /api/obsidian/notes/push`      | Sending notes you changed in the synced folder       |
-| `POST /api/obsidian/notes/delete`    | Telling the server a synced note was deleted         |
-| `GET /api/obsidian/changes`          | Asking what changed in your Brain since the last sync |
-| `GET /api/obsidian/notes`            | Pulling the objects written back under `YouSpot/`     |
-| `GET /api/obsidian/notes/<id>`       | Pulling one object, for a conflict or a single pull   |
+| Request                           | When it happens                                       |
+| --------------------------------- | ----------------------------------------------------- |
+| `GET /api/obsidian/me`            | Checking the token, on the settings screen            |
+| `POST /api/obsidian/notes/push`   | Sending notes you changed in the synced folder        |
+| `POST /api/obsidian/notes/delete` | Telling the server a synced note was deleted          |
+| `GET /api/obsidian/changes`       | Asking what changed in your Brain since the last sync |
+| `GET /api/obsidian/notes`         | Pulling the objects written back under `YouSpot/`     |
+| `GET /api/obsidian/notes/<id>`    | Pulling one object, for a conflict or a single pull   |
 
 **Reading and writing your vault.** The plugin reads the contents of notes inside the folder you
 choose, and writes inside that folder only. It writes frontmatter into your own notes there, to
