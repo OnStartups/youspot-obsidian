@@ -1,8 +1,8 @@
 {
   "id": "youspot",
   "name": "YouSpot",
-  "version": "0.1.3",
-  "minAppVersion": "1.6.6",
+  "version": "0.2.0",
+  "minAppVersion": "1.13.0",
   "description": "Two-way sync between a vault folder and your YouSpot Brain.",
   "author": "YouSpot",
   "authorUrl": "https://youspot.com",

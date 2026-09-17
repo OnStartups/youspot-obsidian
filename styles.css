@@ -25,3 +25,12 @@
 .youspot-wide-input {
   width: 100%;
 }
+
+.youspot-settings-steps {
+  margin: 0.4em 0 0;
+  padding-left: 1.1em;
+}
+
+.youspot-settings-steps li {
+  margin-bottom: 0.2em;
+}

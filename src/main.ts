@@ -1,5 +1,6 @@
-import { Notice, Plugin, type TAbstractFile, TFile } from "obsidian";
+import { addIcon, Notice, Plugin, type TAbstractFile, TFile } from "obsidian";
 import { ApiClient } from "./api";
+import { ICON_ID, ICON_SVG } from "./icon";
 import { obsidianHttp } from "./http-obsidian";
 import { YouSpotSettingTab } from "./settings";
 import { formatStatus } from "./status";
@@ -49,7 +50,8 @@ export default class YouSpotPlugin extends Plugin {
     this.statusEl = this.addStatusBarItem();
     this.statusEl.addClass("youspot-status");
     this.statusEl.addEventListener("click", () => void this.engine.syncNow());
-    this.addRibbonIcon("brain", "YouSpot: sync now", () => void this.syncNow());
+    addIcon(ICON_ID, ICON_SVG);
+    this.addRibbonIcon(ICON_ID, "YouSpot: sync now", () => void this.syncNow());
     this.registerCommands();
     this.registerInterval(window.setInterval(() => this.renderStatus(), 30_000));
 

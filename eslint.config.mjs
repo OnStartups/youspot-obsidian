@@ -20,14 +20,5 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },
-    rules: {
-      /**
-       * The declarative settings API landed in 1.13.0. Adopting it means
-       * raising minAppVersion by eight minor versions to gain settings-search
-       * integration, which is not a trade worth making while the plugin is
-       * new. Revisit when 1.13 is the floor rather than the ceiling.
-       */
-      "obsidianmd/settings-tab/prefer-setting-definitions": "off",
-    },
   },
 );
