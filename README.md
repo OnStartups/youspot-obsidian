@@ -54,9 +54,36 @@ There is no automatic merging.
 | Open in YouSpot                   | Open the active note's object page                           |
 | Reset sync state                  | Forget local bookkeeping; the next sync re-pushes the folder |
 
-## Privacy
+## What the plugin accesses
 
-The plugin talks only to your YouSpot account, using a token you create and can revoke at any time. Only the folder you choose is ever read. Nothing is sent anywhere else, and there is no analytics or telemetry in the plugin.
+The plugin talks only to your YouSpot account, using a token you create and can revoke at any
+time. There is no analytics and no telemetry, and nothing is sent anywhere else.
+
+**Network.** Every request goes to the API base on the settings screen, `https://be.youspot.com`
+by default, and to no other host. Changing that field points the plugin at your own server
+instead. Each call carries your token and nothing else identifying.
+
+| Request                              | When it happens                                     |
+| ------------------------------------ | --------------------------------------------------- |
+| `GET /api/obsidian/me`               | Checking the token, on the settings screen           |
+| `POST /api/obsidian/notes/push`      | Sending notes you changed in the synced folder       |
+| `POST /api/obsidian/notes/delete`    | Telling the server a synced note was deleted         |
+| `GET /api/obsidian/changes`          | Asking what changed in your Brain since the last sync |
+| `GET /api/obsidian/notes`            | Pulling the objects written back under `YouSpot/`     |
+| `GET /api/obsidian/notes/<id>`       | Pulling one object, for a conflict or a single pull   |
+
+**Reading and writing your vault.** The plugin reads the contents of notes inside the folder you
+choose, and writes inside that folder only. It writes frontmatter into your own notes there, to
+give each one a stable id, and creates files under `<your folder>/YouSpot/`. Nothing outside the
+folder is read or written.
+
+**Listing your files.** The plugin asks Obsidian for the paths of the Markdown files in the vault,
+which is how it finds the notes in your folder and how the folder picker offers you folder names.
+That is a list of paths. Files outside your chosen folder are never opened, and their contents are
+never read or sent.
+
+**Clipboard.** One button writes to the clipboard: the one on the settings screen that copies the
+`.gitignore` line for your token file. The plugin never reads the clipboard.
 
 ## Building
 
