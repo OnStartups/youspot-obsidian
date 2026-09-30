@@ -56,6 +56,12 @@ export class MemoryVault implements VaultPort {
     if (f) {
       this.files.delete(from);
       this.files.set(to, f);
+      const cache = this.caches.get(from);
+      this.caches.delete(from);
+      if (cache) this.caches.set(to, cache);
+      const links = this.links.get(from);
+      this.links.delete(from);
+      if (links) this.links.set(to, links);
     }
   }
   async trash(path: string) {

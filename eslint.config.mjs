@@ -2,21 +2,18 @@ import js from "@eslint/js";
 import obsidianmd from "eslint-plugin-obsidianmd";
 import tseslint from "typescript-eslint";
 
-/**
- * Obsidian's own review rules. The workspace lints with oxlint, which knows
- * nothing about the plugin API — these are the checks the community-plugin
- * reviewers actually run, so the plugin carries its own config and this is
- * the gate that decides whether a submission is ready.
- *
- * scripts/ and test/ are excluded: they never ship inside the plugin, and
- * the rules are about runtime behaviour in Obsidian.
- */
 export default tseslint.config(
   { ignores: ["dist/**", "node_modules/**", "scripts/**", "test/**", "eslint.config.mjs"] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   ...obsidianmd.configs.recommended,
   {
+    rules: {
+      "obsidianmd/ui/sentence-case": [
+        "warn",
+        { brands: ["YouSpot", "Obsidian", "Brain"], ignoreRegex: ["^mcp_"] },
+      ],
+    },
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
     },

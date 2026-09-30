@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ChangeQueue, MAX_ATTEMPTS, type QueueEntry } from "../src/sync/queue";
+import { ChangeQueue, type QueueEntry } from "../src/sync/queue";
 
 describe("ChangeQueue", () => {
   test("coalesces repeated changes to one entry", () => {
@@ -36,15 +36,16 @@ describe("ChangeQueue", () => {
     expect(q.drain(100).length).toBe(50);
     expect(q.size).toBe(0);
   });
-  test("requeue gives up after the attempt cap", () => {
+  test("retry entries remain available beyond five attempts", () => {
     const q = new ChangeQueue();
     let entry: QueueEntry = { path: "a.md", kind: "upsert", attempts: 0 };
-    for (let i = 1; i < MAX_ATTEMPTS; i++) {
+    for (let i = 1; i < 10; i++) {
       expect(q.requeue(entry)).toBe(true);
       entry = q.drain()[0] ?? entry;
       expect(entry.attempts).toBe(i);
     }
-    expect(q.requeue(entry)).toBe(false);
+    expect(q.requeue(entry)).toBe(true);
+    expect(q.drain()[0]?.attempts).toBe(10);
   });
   test("restore does not clobber newer entries", () => {
     const q = new ChangeQueue();

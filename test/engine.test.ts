@@ -5,7 +5,8 @@ import { DEFAULT_SETTINGS, emptyState } from "../src/sync/state";
 import type { ChangeObject, PluginData, PushRequest } from "../src/types";
 import { MemoryVault } from "./memory-vault";
 
-type Handler = (req: HttpRequest, body: unknown) => { status: number; json: unknown };
+type Reply = { status: number; json: unknown };
+type Handler = (req: HttpRequest, body: unknown) => Reply | Promise<Reply>;
 
 class FakeHttp implements HttpPort {
   requests: HttpRequest[] = [];
@@ -19,7 +20,7 @@ class FakeHttp implements HttpPort {
     const handler = this.routes.get(`${req.method} ${path}`);
     if (!handler) return { status: 404, text: JSON.stringify({ error: "no_route" }) };
     const body = req.body ? JSON.parse(req.body) : undefined;
-    const out = handler(req, body);
+    const out = await handler(req, body);
     return { status: out.status, text: JSON.stringify(out.json) };
   }
 }
@@ -178,7 +179,17 @@ describe("SyncEngine push", () => {
     engine.handleDeleted("Brain/a.md");
     const summary = await engine.push();
     expect(summary.deleted).toBe(1);
-    expect(deletes[0]).toEqual({ vault_id: "vault1", notes: [{ youspot_id: "note_1" }] });
+    expect(deletes[0]).toEqual({
+      vault_id: "vault1",
+      notes: [
+        {
+          youspot_id: "note_1",
+          expected_hash: "srv0",
+          expected_path: "Brain/a.md",
+          expected_synced_at: "2026-09-02T00:00:00Z",
+        },
+      ],
+    });
     expect(data.state.notes["Brain/a.md"]).toBeUndefined();
   });
 
@@ -411,7 +422,7 @@ describe("SyncEngine pull", () => {
 });
 
 describe("SyncEngine reconcile", () => {
-  test("queues new and missing files and deletes server notes gone from disk", async () => {
+  test("uploads discovered files and preserves server notes missing on this client", async () => {
     const { vault, http, engine, data } = setup();
     const seen: PushRequest[] = [];
     okPush(http, seen);
@@ -449,10 +460,9 @@ describe("SyncEngine reconcile", () => {
     };
     await engine.reconcile();
     expect(seen[0]?.notes.map((n) => n.path)).toEqual(["Brain/new.md"]);
-    expect(deletes[0]).toEqual({
-      vault_id: "vault1",
-      notes: [{ youspot_id: "note_m" }, { youspot_id: "note_gone" }],
-    });
+    expect(deletes).toEqual([]);
+    expect(data.state.missing?.["Brain/gone.md"]?.objectId).toBe("note_gone");
+    expect(data.state.notes["Brain/missing.md"]?.youspot_id).toBe("note_m");
   });
 
   test("pullServerVersion writes a conflict copy that never syncs", async () => {
@@ -481,5 +491,275 @@ describe("SyncEngine reconcile", () => {
     expect(vault.files.get(target ?? "")?.content).toContain("server text");
     engine.handleChanged(target ?? "");
     expect(engine.queue.size).toBe(0);
+  });
+});
+
+describe("upload recovery and deletion safety", () => {
+  test("a missing queued upsert never becomes a deletion", async () => {
+    const { vault, http, engine, data } = setup();
+    okPush(http, []);
+    vault.add("Brain/a.md", "original");
+    engine.handleChanged("Brain/a.md");
+    await engine.push();
+    engine.handleChanged("Brain/a.md");
+    vault.files.delete("Brain/a.md");
+    await engine.push();
+    expect(http.requests.filter((request) => request.url.endsWith("/delete"))).toEqual([]);
+    expect(data.state.notes["Brain/a.md"]?.youspot_id).toBe("note_1");
+  });
+
+  test("moving an original out of scope preserves its Brain record", async () => {
+    const { vault, http, engine, data } = setup();
+    okPush(http, []);
+    vault.add("Brain/a.md", "original");
+    engine.handleChanged("Brain/a.md");
+    await engine.push();
+    await vault.rename("Brain/a.md", "Outside/a.md");
+    engine.handleRenamed("Brain/a.md", "Outside/a.md");
+    await engine.push();
+    expect(http.requests.filter((request) => request.url.endsWith("/delete"))).toEqual([]);
+    expect(data.state.notes["Brain/a.md"]).toBeDefined();
+  });
+
+  test("a recreated original cancels deletion before the request", async () => {
+    const { vault, http, engine } = setup();
+    okPush(http, []);
+    vault.add("Brain/a.md", "original");
+    engine.handleChanged("Brain/a.md");
+    await engine.push();
+    vault.files.delete("Brain/a.md");
+    engine.handleDeleted("Brain/a.md");
+    vault.add("Brain/a.md", "restored", { frontmatter: { youspot_id: "note_1" }, tags: [] });
+    await engine.push();
+    expect(http.requests.filter((request) => request.url.endsWith("/delete"))).toEqual([]);
+  });
+
+  test("a server deletion conflict keeps the identity and a reviewable failure", async () => {
+    const { vault, http, engine, data } = setup();
+    okPush(http, []);
+    http.on("POST", "/api/obsidian/notes/delete", () => ({
+      status: 200,
+      json: { success: true, results: [{ status: "conflict", object_id: "note_1" }] },
+    }));
+    vault.add("Brain/a.md", "original");
+    engine.handleChanged("Brain/a.md");
+    await engine.push();
+    vault.files.delete("Brain/a.md");
+    engine.handleDeleted("Brain/a.md");
+    const result = await engine.push();
+    expect(result.outcome).toBe("failed");
+    expect(data.state.notes["Brain/a.md"]?.youspot_id).toBe("note_1");
+    expect(data.state.failures?.["Brain/a.md"]?.entry.expectedHash).toBe("srv0");
+  });
+
+  test("permanent errors do not loop or disappear, and a restart can retry them", async () => {
+    const first = setup();
+    first.http.on("POST", "/api/obsidian/notes/push", (_request, body) => ({
+      status: 200,
+      json: {
+        success: true,
+        results: (body as PushRequest).notes.map((note) => ({
+          path: note.path,
+          status: "error",
+          error: "brain_limit_reached",
+        })),
+      },
+    }));
+    first.vault.add("Brain/a.md", "original");
+    first.engine.handleChanged("Brain/a.md");
+    const result = await first.engine.push();
+    expect(result.outcome).toBe("failed");
+    expect(first.http.requests).toHaveLength(1);
+    expect(first.data.state.lastPushAt).toBeNull();
+    expect(first.data.state.failures?.["Brain/a.md"]?.hash).toBeDefined();
+    first.engine.handleChanged("Brain/a.md");
+    await first.engine.push();
+    expect(first.http.requests).toHaveLength(1);
+    const second = setup();
+    second.data.state = structuredClone(first.data.state);
+    second.vault.add("Brain/a.md", "original");
+    second.engine.reloadState();
+    okPush(second.http, []);
+    await second.engine.retryFailed();
+    expect(second.data.state.notes["Brain/a.md"]?.youspot_id).toBe("note_1");
+    expect(second.engine.failedCount).toBe(0);
+  });
+
+  test("a successful download cannot clear a failed upload", async () => {
+    const { vault, http, engine, data } = setup();
+    http.on("POST", "/api/obsidian/notes/push", () => ({
+      status: 200,
+      json: {
+        success: true,
+        results: [{ path: "Brain/a.md", status: "error", error: "markdown_too_large" }],
+      },
+    }));
+    http.on("GET", "/api/obsidian/changes", () => changes([]));
+    vault.add("Brain/a.md", "original");
+    engine.handleChanged("Brain/a.md");
+    await engine.push();
+    await engine.pull();
+    expect(data.state.lastPullAt).toBe(5000);
+    expect(data.state.lastError).toBe("markdown_too_large");
+    expect(data.state.uploadError).toBe("markdown_too_large");
+  });
+
+  test("sync now finds preexisting notes and edits with older modification times", async () => {
+    const { vault, http, engine } = setup({ pullEnabled: false });
+    const seen: PushRequest[] = [];
+    okPush(http, seen);
+    vault.add("Brain/a.md", "original");
+    await engine.syncNow();
+    vault.files.set("Brain/a.md", { content: "edited without a new timestamp", mtime: 1 });
+    await engine.syncNow();
+    expect(seen).toHaveLength(2);
+    expect(seen[1]?.notes[0]).toMatchObject({
+      youspot_id: "note_1",
+      markdown: "edited without a new timestamp",
+    });
+    await engine.syncNow();
+    expect(seen).toHaveLength(2);
+  });
+
+  test("managed bytes are excluded even before metadata arrives", async () => {
+    const { vault, http, engine } = setup({ pullEnabled: false });
+    okPush(http, []);
+    vault.add(
+      "Brain/moved.md",
+      '---\nyouspot_id: "company_1"\nyouspot_managed: true\n---\nmanaged',
+    );
+    vault.caches.delete("Brain/moved.md");
+    engine.handleChanged("Brain/moved.md");
+    await engine.syncNow();
+    expect(http.requests).toEqual([]);
+    expect(engine.failedCount).toBe(0);
+  });
+
+  test("a request failure reports failure and restores durable pending work", async () => {
+    const { vault, http, engine, data } = setup();
+    http.on("POST", "/api/obsidian/notes/push", () => ({
+      status: 401,
+      json: { error: "not_authenticated" },
+    }));
+    vault.add("Brain/a.md", "original");
+    engine.handleChanged("Brain/a.md");
+    const result = await engine.push();
+    expect(result.errors).toBe(1);
+    expect(result.outcome).toBe("failed");
+    expect(data.state.pending?.[0]?.path).toBe("Brain/a.md");
+    const blocked = await engine.pushNote("Brain/a.md");
+    expect(blocked.outcome).toBe("deferred");
+  });
+
+  test("newer bytes arriving during upload remain eligible for acknowledgement", async () => {
+    const { vault, http, engine, data } = setup();
+    const seen: PushRequest[] = [];
+    http.on("POST", "/api/obsidian/notes/push", async (_request, body) => {
+      const request = body as PushRequest;
+      seen.push(request);
+      if (seen.length === 1) {
+        vault.files.set("Brain/a.md", { content: "newer bytes", mtime: 2000 });
+        engine.handleChanged("Brain/a.md");
+      }
+      return {
+        status: 200,
+        json: {
+          success: true,
+          results: request.notes.map((note) => ({
+            path: note.path,
+            status: "updated",
+            object_id: "note_1",
+            content_hash: note.markdown,
+            synced_at: "t",
+          })),
+        },
+      };
+    });
+    vault.add("Brain/a.md", "older bytes");
+    engine.handleChanged("Brain/a.md");
+    await engine.push();
+    expect(seen.map((request) => request.notes[0]?.markdown)).toEqual([
+      "older bytes",
+      "newer bytes",
+    ]);
+    expect(data.state.notes["Brain/a.md"]?.content_hash).toBe("newer bytes");
+    expect(data.state.pending).toEqual([]);
+  });
+
+  test("queued full refresh cannot starve original uploads", async () => {
+    const { vault, http, engine, data } = setup({ pullEnabled: false });
+    const seen: PushRequest[] = [];
+    okPush(http, seen);
+    data.state.refresh = {
+      account: "test@example.invalid",
+      apiBase: data.settings.apiBase,
+      root: "Brain/YouSpot",
+      runId: "run_1",
+      request: {
+        obsidian_version: 1,
+        space_id: "space",
+        types: ["company"],
+        attachments: "none",
+        request_key: "key",
+      },
+    };
+    http.on("GET", "/api/obsidian/me", () => ({
+      status: 200,
+      json: { email: "test@example.invalid", brain_count: 1 },
+    }));
+    http.on("GET", "/api/obsidian/exports/run_1", () => ({
+      status: 200,
+      json: { run: { id: "run_1", status: "queued" } },
+    }));
+    vault.add("Brain/a.md", "original");
+    await engine.syncNow();
+    expect(seen).toHaveLength(1);
+    expect(data.state.refresh?.runId).toBe("run_1");
+    expect(data.state.notes["Brain/a.md"]?.youspot_id).toBe("note_1");
+  });
+
+  test("a tombstoned original requires explicit restoration instead of a background resurrection", async () => {
+    const { vault, http, engine, data } = setup();
+    const seen: PushRequest[] = [];
+    okPush(http, seen);
+    vault.add("Brain/a.md", "original");
+    await engine.syncNow();
+    http.on("GET", "/api/obsidian/changes", () =>
+      changes([], {
+        tombstones: [
+          {
+            object_id: "note_1",
+            type: "note",
+            deleted_at: "now",
+            obsidian: { vault_id: "vault1", path: "Brain/a.md" },
+          },
+        ],
+      }),
+    );
+    await engine.syncNow();
+    expect(data.state.failures?.["Brain/a.md"]?.error).toContain("Removed from Brain");
+    vault.files.set("Brain/a.md", { content: "new local bytes", mtime: 8000 });
+    engine.handleChanged("Brain/a.md");
+    await engine.syncNow();
+    await engine.retryFailed();
+    expect(seen).toHaveLength(1);
+    const refused = await engine.pushNote("Brain/a.md");
+    expect(refused.outcome).toBe("failed");
+    await engine.pushNote("Brain/a.md", true);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]?.notes[0]).toMatchObject({ force: true, youspot_id: "note_1" });
+  });
+
+  test("an empty queue cannot clear an authorization error without a successful account check", async () => {
+    const { http, engine, data } = setup();
+    data.state.uploadError = "not_authenticated";
+    http.on("GET", "/api/obsidian/me", () => ({
+      status: 401,
+      json: { error: "not_authenticated" },
+    }));
+    const result = await engine.push();
+    expect(result.outcome).toBe("failed");
+    expect(data.state.uploadError).toBe("not_authenticated");
+    expect(data.state.lastUploadCheckAt).toBeNull();
   });
 });

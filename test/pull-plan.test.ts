@@ -30,6 +30,22 @@ function obj(overrides: Partial<ChangeObject>): ChangeObject {
 }
 
 describe("planPull", () => {
+  test("a same-vault original missing during hydration does not become a managed duplicate", async () => {
+    const plan = await planPull(
+      [
+        obj({
+          object_id: "note_missing",
+          type: "note",
+          obsidian: { vault_id: "v", path: "Brain/missing.md" },
+        }),
+      ],
+      [],
+      emptyState("v"),
+      DEFAULT_SETTINGS,
+      rules,
+    );
+    expect(plan.actions).toEqual([]);
+  });
   test("creates a file for a new object", async () => {
     const plan = await planPull([obj({})], [], emptyState("v"), DEFAULT_SETTINGS, rules);
     expect(plan.actions).toHaveLength(1);

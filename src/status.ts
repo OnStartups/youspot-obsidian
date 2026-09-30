@@ -5,6 +5,9 @@ export interface StatusInput {
   lastPushAt: number | null;
   lastPullAt: number | null;
   error: string | null;
+  uploadError?: string | null;
+  downloadError?: string | null;
+  failed?: number;
   serverEdited: number;
   conflicts: number;
   now: number;
@@ -22,6 +25,9 @@ export function relativeTime(then: number, now: number): string {
 
 export function formatStatus(input: StatusInput): string {
   if (!input.configured) return "YouSpot: not connected";
+  if (input.uploadError || input.failed)
+    return `YouSpot: uploads need attention (${input.failed ?? 0} failed), download ${input.lastPullAt ? relativeTime(input.lastPullAt, input.now) : "never"}`;
+  if (input.downloadError) return "YouSpot: downloads need attention";
   if (input.error) return `YouSpot: error (${input.error})`;
   if (input.running) return "YouSpot: syncing…";
   const parts: string[] = [];
@@ -29,9 +35,8 @@ export function formatStatus(input: StatusInput): string {
   if (input.conflicts > 0)
     parts.push(`${input.conflicts} conflict${input.conflicts === 1 ? "" : "s"}`);
   if (input.serverEdited > 0) parts.push(`${input.serverEdited} edited in YouSpot`);
-  const last = Math.max(input.lastPushAt ?? 0, input.lastPullAt ?? 0);
   if (parts.length === 0) {
-    return last ? `YouSpot: synced ${relativeTime(last, input.now)}` : "YouSpot: never synced";
+    return `YouSpot: upload ${input.lastPushAt ? relativeTime(input.lastPushAt, input.now) : "never"}, download ${input.lastPullAt ? relativeTime(input.lastPullAt, input.now) : "never"}`;
   }
   return `YouSpot: ${parts.join(", ")}`;
 }

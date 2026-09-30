@@ -37,6 +37,15 @@ export function emptyState(vaultId: string): SyncState {
     lastPullAt: null,
     lastError: null,
     serverEdited: [],
+    pending: [],
+    failures: {},
+    missing: {},
+    uploadError: null,
+    downloadError: null,
+    refreshError: null,
+    lastUploadAttemptAt: null,
+    lastUploadCheckAt: null,
+    lastDownloadAttemptAt: null,
   };
 }
 
@@ -66,7 +75,7 @@ export function loadPluginData(raw: unknown, vaultId: () => string = newVaultId)
     settings: {
       ...merged,
       selectionInitialized: Boolean(
-        settings.selectionInitialized || (data.version !== 2 && data.settings),
+        settings.selectionInitialized || ((data.version === 1 || !data.version) && data.settings),
       ),
     },
     state: {

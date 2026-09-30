@@ -10,6 +10,7 @@ export interface PushNote {
   wikilinks: WikiLinkRef[];
   mtime: string;
   force?: boolean;
+  restore_deleted?: boolean;
 }
 
 export interface PushRequest {
@@ -48,10 +49,14 @@ export interface PushResponse {
   brain_limit?: { cap: number; count: number };
 }
 
-export type DeleteRef = { youspot_id: string } | { path: string };
+export type DeleteRef = ({ youspot_id: string } | { path: string }) & {
+  expected_hash?: string;
+  expected_path?: string;
+  expected_synced_at?: string;
+};
 
 export interface DeleteResult {
-  status: "deleted" | "not_found" | "already_deleted";
+  status: "deleted" | "not_found" | "already_deleted" | "conflict";
   object_id?: string;
 }
 
@@ -175,6 +180,15 @@ export interface ExportState {
 }
 
 export interface SyncState {
+  pending?: PendingChange[];
+  failures?: Record<string, FailedChange>;
+  missing?: Record<string, MissingNote>;
+  uploadError?: string | null;
+  downloadError?: string | null;
+  refreshError?: string | null;
+  lastUploadAttemptAt?: number | null;
+  lastUploadCheckAt?: number | null;
+  lastDownloadAttemptAt?: number | null;
   refresh?: RefreshState;
   refreshReport?: RefreshReport;
   pendingWrites?: Record<string, { path: string; hash: string }>;
@@ -190,9 +204,34 @@ export interface SyncState {
 }
 
 export interface PluginData {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   settings: YouSpotSettings;
   state: SyncState;
+}
+
+export interface PendingChange {
+  path: string;
+  kind: "upsert" | "delete";
+  youspotId?: string;
+  attempts: number;
+  force?: boolean;
+  expectedHash?: string;
+  expectedPath?: string;
+  expectedSyncedAt?: string;
+}
+
+export interface FailedChange {
+  entry: PendingChange;
+  error: string;
+  hash?: string;
+}
+
+export interface MissingNote {
+  objectId: string;
+  path: string;
+  contentHash: string;
+  serverEdited: boolean;
+  syncedAt?: string;
 }
 
 export interface PathRules {
@@ -250,6 +289,7 @@ export interface RefreshState {
 export interface RefreshReport {
   runId: string;
   written: number;
+  current?: number;
   originals: number;
   assets: number;
   conflicts: { path: string; reason: string }[];

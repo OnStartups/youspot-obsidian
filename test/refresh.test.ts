@@ -200,7 +200,8 @@ describe("shared archive delivery", () => {
     expect(deps.data.state.pendingWrites?.fixture_1).toBeDefined();
     const report = await applyArchive(deps, archive, "run1");
     expect(report.conflicts).toEqual([]);
-    expect(report.written).toBe(fixture.records.length);
+    expect(report.written).toBe(fixture.records.length - 1);
+    expect(report.current).toBe(1);
     expect(deps.data.state.pendingWrites).toEqual({});
   });
 
@@ -208,6 +209,9 @@ describe("shared archive delivery", () => {
     const { archive } = await packaged();
     const deps = setup();
     await applyArchive(deps, archive, "run1");
+    archive.files[first.path] = new TextEncoder().encode(
+      fixture.files[first.path as keyof typeof fixture.files] + "\nA new server revision.\n",
+    );
     const write = deps.vault.writeGuarded.bind(deps.vault);
     deps.vault.writeGuarded = async (path, content, previous) => {
       if (path === exported(first.path)) await deps.vault.write(path, "Concurrent edit");
@@ -237,6 +241,55 @@ describe("shared archive delivery", () => {
     const { bytes, run } = await packaged();
     await expect(readArchive(bytes, { ...run, sha256: "wrong" })).rejects.toThrow("integrity");
     await expect(packaged({ "../outside.md": "escape" })).rejects.toThrow("unsafe paths");
+  });
+
+  test.each(["stale", "absent"])(
+    "unchanged cloud files recover %s baselines without rewrites or duplicates",
+    async (baseline) => {
+      const { archive } = await packaged();
+      const deps = setup();
+      await applyArchive(deps, archive, "first");
+      const before = deps.vault.listPaths();
+      if (baseline === "absent") deps.data.state.exports = {};
+      else
+        for (const entry of Object.values(deps.data.state.exports)) entry.rendered_hash = "stale";
+      deps.vault.writeGuarded = async () => {
+        throw new Error("Already current files must not be rewritten");
+      };
+      const report = await applyArchive(deps, archive, "second");
+      expect(report.current).toBe(fixture.records.length);
+      expect(report.written).toBe(0);
+      expect(report.conflicts).toEqual([]);
+      expect(deps.vault.listPaths()).toEqual(before);
+      expect(deps.data.state.exports.fixture_1?.rendered_hash).toBe(
+        await sha256Hex(await deps.vault.read(exported(first.path))),
+      );
+    },
+  );
+
+  test("a fresh installation preserves edited managed bytes without a trusted baseline", async () => {
+    const { archive } = await packaged();
+    const deps = setup();
+    await applyArchive(deps, archive, "first");
+    const path = exported(first.path);
+    const edited = (await deps.vault.read(path)) + "\nMy local edit\n";
+    await deps.vault.write(path, edited);
+    deps.data.state.exports = {};
+    const report = await applyArchive(deps, archive, "second");
+    expect(await deps.vault.read(path)).toBe(edited);
+    expect(report.conflicts.map((item) => item.path)).toEqual([path]);
+    expect(report.current).toBe(fixture.records.length - 1);
+  });
+
+  test("duplicate managed identities stop delivery before overwriting either copy", async () => {
+    const { archive } = await packaged();
+    const deps = setup();
+    await applyArchive(deps, archive, "first");
+    const original = await deps.vault.read(exported(first.path));
+    deps.vault.add("Brain/YouSpot/duplicate.md", original);
+    await expect(applyArchive(deps, archive, "second")).rejects.toThrow("same object");
+    expect(await deps.vault.read(exported(first.path))).toBe(original);
+    expect(await deps.vault.read("Brain/YouSpot/duplicate.md")).toBe(original);
   });
 
   test("rejects documents outside the selected types even with valid checksums", async () => {

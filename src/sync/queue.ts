@@ -1,14 +1,7 @@
 export type QueueKind = "upsert" | "delete";
 
-export interface QueueEntry {
-  path: string;
-  kind: QueueKind;
-  youspotId?: string;
-  attempts: number;
-  force?: boolean;
-}
+export type QueueEntry = import("../types").PendingChange;
 
-export const MAX_ATTEMPTS = 5;
 export const BATCH_SIZE = 100;
 
 export class ChangeQueue {
@@ -22,6 +15,14 @@ export class ChangeQueue {
     return this.entries.has(path);
   }
 
+  snapshot(): QueueEntry[] {
+    return [...this.entries.values()];
+  }
+
+  cancel(path: string): void {
+    this.entries.delete(path);
+  }
+
   upsert(path: string, options: { youspotId?: string; force?: boolean } = {}): void {
     const existing = this.entries.get(path);
     this.entries.set(path, {
@@ -33,23 +34,32 @@ export class ChangeQueue {
     });
   }
 
-  remove(path: string, youspotId?: string): void {
+  remove(
+    path: string,
+    youspotId?: string,
+    expectedHash?: string,
+    expectedPath = path,
+    expectedSyncedAt?: string,
+  ): void {
     const existing = this.entries.get(path);
     const id = youspotId ?? existing?.youspotId;
     if (!id) {
       this.entries.delete(path);
       return;
     }
-    this.entries.set(path, { path, kind: "delete", youspotId: id, attempts: 0 });
+    this.entries.set(path, {
+      path,
+      kind: "delete",
+      youspotId: id,
+      attempts: 0,
+      ...(expectedHash ? { expectedHash, expectedPath } : {}),
+      ...(expectedSyncedAt ? { expectedSyncedAt } : {}),
+    });
   }
 
   rename(from: string, to: string, youspotId?: string): void {
     const existing = this.entries.get(from);
     this.entries.delete(from);
-    if (existing?.kind === "delete") {
-      this.entries.set(to, { ...existing, path: to });
-      return;
-    }
     this.entries.set(to, {
       path: to,
       kind: "upsert",
@@ -72,7 +82,6 @@ export class ChangeQueue {
   requeue(entry: QueueEntry): boolean {
     if (this.entries.has(entry.path)) return true;
     const attempts = entry.attempts + 1;
-    if (attempts >= MAX_ATTEMPTS) return false;
     this.entries.set(entry.path, { ...entry, attempts });
     return true;
   }

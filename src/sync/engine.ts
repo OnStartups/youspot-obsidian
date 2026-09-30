@@ -9,6 +9,7 @@ import { type PullAction, planPull } from "./pull";
 import { applyPushResults, forgetDeleted } from "./push";
 import { BATCH_SIZE, ChangeQueue, type QueueEntry } from "./queue";
 import { planReconcile } from "./scan";
+import { managedIdentity, recoverManaged } from "./managed";
 import { refreshBrain } from "./refresh";
 
 export interface EngineDeps {
@@ -30,6 +31,7 @@ export interface PushSummary {
   deleted: number;
   conflicts: number;
   errors: number;
+  outcome?: "completed" | "partial" | "failed" | "deferred" | "no_change";
 }
 
 export interface PullSummary {
@@ -47,13 +49,81 @@ export class SyncEngine {
   private pulling: Promise<PullSummary> | null = null;
   private refreshing: Promise<void> | null = null;
   private dirty = false;
+  private syncing: Promise<void> | null = null;
+  private scanning: Promise<void> | null = null;
+  private inflight: QueueEntry[] = [];
+  private observed = new Set<string>();
+  private saving: Promise<void> = Promise.resolve();
   private debounceTimer: number | null = null;
   private maxWaitTimer: number | null = null;
   private backoffMs = MIN_BACKOFF;
   private backoffUntil = 0;
   private halted = false;
 
-  constructor(private readonly deps: EngineDeps) {}
+  constructor(private readonly deps: EngineDeps) {
+    this.reloadState();
+  }
+
+  reloadState(): void {
+    this.queue.clear();
+    this.queue.restore(this.state.pending ?? []);
+    this.inflight = [];
+    this.observed.clear();
+    this.state.failures ??= {};
+    this.state.missing ??= {};
+  }
+
+  get failedCount(): number {
+    return Object.keys(this.state.failures ?? {}).length;
+  }
+
+  async suspend(): Promise<void> {
+    this.pause();
+    await Promise.all([this.syncing, this.scanning, this.pushing, this.pulling, this.refreshing]);
+    await this.saving;
+    await this.save();
+  }
+
+  pause(): void {
+    this.halted = true;
+    this.stop();
+  }
+
+  async retryFailed(): Promise<PushSummary> {
+    this.resume();
+    for (const [path, failure] of Object.entries(this.state.failures ?? {})) {
+      if (failure.error.startsWith("Removed from Brain.")) continue;
+      this.queue.restore([failure.entry]);
+      delete this.state.failures?.[path];
+    }
+    await this.save();
+    return this.push();
+  }
+
+  private async save(): Promise<void> {
+    const pending = new Map(this.inflight.map((entry) => [entry.path, entry]));
+    for (const entry of this.queue.snapshot()) pending.set(entry.path, entry);
+    this.state.pending = [...pending.values()];
+    this.state.lastError =
+      this.state.uploadError ?? this.state.downloadError ?? this.state.refreshError ?? null;
+    await this.deps.persist();
+  }
+
+  private changed(): void {
+    this.saving = this.saving
+      .catch(() => undefined)
+      .then(() => this.save())
+      .catch((error: unknown) => {
+        this.halted = true;
+        this.stop();
+        this.state.lastError =
+          "Local save failed. Pending changes were kept in memory. Retry after checking storage.";
+        this.deps.notify(this.state.lastError);
+        this.deps.onStatus?.();
+        console.error(error);
+      });
+    this.schedule();
+  }
 
   private get now(): number {
     return (this.deps.now ?? Date.now)();
@@ -99,7 +169,6 @@ export class SyncEngine {
     this.halted = false;
     this.backoffMs = MIN_BACKOFF;
     this.backoffUntil = 0;
-    this.state.lastError = null;
   }
 
   stop(): void {
@@ -123,14 +192,15 @@ export class SyncEngine {
       if (this.pulling) await this.pulling;
       try {
         await refreshBrain(this.deps);
-        this.state.lastError = null;
+        this.state.refreshError = null;
       } catch (error) {
-        this.failed(error);
+        this.failed(error, "refresh");
       }
-      await this.deps.persist();
+      await this.save();
     })().finally(() => {
       this.refreshing = null;
       this.deps.onStatus?.();
+      if (this.queue.size) this.schedule();
     });
     this.deps.onStatus?.();
     return this.refreshing;
@@ -140,13 +210,15 @@ export class SyncEngine {
     if (this.running) return;
     if (this.state.refresh?.runId) await this.deps.api.releaseExport(this.state.refresh.runId);
     delete this.state.refresh;
-    await this.deps.persist();
+    await this.save();
   }
 
   handleChanged(path: string): void {
     if (this.managed.has(path) || this.isManaged(path) || !isSyncable(path, this.rules)) return;
+    if (this.state.failures?.[path]?.error.startsWith("Removed from Brain.")) return;
+    delete this.state.missing?.[path];
     this.queue.upsert(path, { youspotId: this.state.notes[path]?.youspot_id });
-    this.schedule();
+    this.changed();
   }
 
   handleDeleted(path: string): void {
@@ -158,8 +230,13 @@ export class SyncEngine {
       return;
     }
     if (!isSyncable(path, this.rules)) return;
-    this.queue.remove(path, this.state.notes[path]?.youspot_id);
-    this.schedule();
+    const note = this.state.notes[path];
+    if (this.observed.has(path) && note?.content_hash && !note.conflict) {
+      this.queue.remove(path, note.youspot_id, note.content_hash, path, note.server_updated_at);
+    } else {
+      this.queue.cancel(path);
+    }
+    this.changed();
   }
 
   handleRenamed(from: string, to: string): void {
@@ -179,12 +256,16 @@ export class SyncEngine {
         delete this.state.notes[from];
         this.state.notes[to] = { ...note, local_hash: "" };
       }
+      delete this.state.failures?.[from];
+      delete this.state.missing?.[from];
+      if (this.observed.delete(from)) this.observed.add(to);
       this.queue.rename(from, to, note?.youspot_id);
-      this.schedule();
+      this.changed();
       return;
     }
     if (fromSyncable) {
-      this.handleDeleted(from);
+      this.queue.cancel(from);
+      this.changed();
       return;
     }
     if (toSyncable) this.handleChanged(to);
@@ -207,17 +288,29 @@ export class SyncEngine {
     if (this.maxWaitTimer) this.clearTimer(this.maxWaitTimer);
     this.debounceTimer = null;
     this.maxWaitTimer = null;
-    await this.push();
+    try {
+      await this.push();
+    } catch (error) {
+      this.pause();
+      this.failed(error, "upload");
+    }
   }
 
-  async syncNow(): Promise<void> {
-    if (this.refreshing) return;
-    if (this.state.refresh) {
-      await this.refresh();
-      return;
-    }
-    await this.push();
-    if (this.settings.pullEnabled) await this.pull();
+  syncNow(): Promise<void> {
+    if (this.syncing) return this.syncing;
+    this.syncing = (async () => {
+      if (this.refreshing) await this.refreshing;
+      if (!this.configured || this.halted) return;
+      await this.discover();
+      await this.push();
+      if (this.halted) return;
+      if (this.state.refresh) await this.refresh();
+      else if (this.settings.pullEnabled) await this.pull();
+      await this.push();
+    })().finally(() => {
+      this.syncing = null;
+    });
+    return this.syncing;
   }
 
   push(): Promise<PushSummary> {
@@ -239,13 +332,17 @@ export class SyncEngine {
   async pushNote(path: string, force = false): Promise<PushSummary> {
     if (this.isManaged(path)) {
       this.deps.notify("Managed exports are local copies. Edit the original record in YouSpot.");
-      return { pushed: 0, deleted: 0, conflicts: 0, errors: 1 };
+      return { pushed: 0, deleted: 0, conflicts: 0, errors: 1, outcome: "failed" };
     }
     if (!isSyncable(path, this.rules)) {
       this.deps.notify("This note is outside the YouSpot sync folder.");
-      return { pushed: 0, deleted: 0, conflicts: 0, errors: 0 };
+      return { pushed: 0, deleted: 0, conflicts: 0, errors: 0, outcome: "deferred" };
     }
     const note = this.state.notes[path];
+    if (this.state.failures?.[path]?.error.startsWith("Removed from Brain.") && !force) {
+      return { pushed: 0, deleted: 0, conflicts: 0, errors: 1, outcome: "failed" };
+    }
+    delete this.state.failures?.[path];
     if (force && note) delete note.conflict;
     this.queue.upsert(path, { youspotId: note?.youspot_id, force });
     return this.push();
@@ -253,136 +350,260 @@ export class SyncEngine {
 
   private async runPush(): Promise<PushSummary> {
     const summary: PushSummary = { pushed: 0, deleted: 0, conflicts: 0, errors: 0 };
-    if (!this.configured || this.halted || this.refreshing) return summary;
+    if (!this.configured || this.halted || this.refreshing || this.pulling) {
+      return { ...summary, outcome: "deferred" };
+    }
     if (this.now < this.backoffUntil) {
       this.rearm(this.backoffUntil - this.now);
-      return summary;
+      return { ...summary, outcome: "deferred" };
     }
+    await this.saving;
+    if (this.halted) return { ...summary, outcome: "deferred" };
+    this.state.lastUploadAttemptAt = this.now;
     this.deps.onStatus?.();
-    while (this.queue.size > 0) {
+    while (this.queue.size > 0 && !this.halted) {
       const entries = this.queue.drain(BATCH_SIZE);
+      this.inflight = entries;
       try {
+        await this.save();
         await this.pushBatch(entries, summary);
         this.backoffMs = MIN_BACKOFF;
       } catch (err) {
-        this.queue.restore(entries);
-        this.failed(err);
+        if (err instanceof ApiError && !err.retryable && !err.unauthorized && !err.disabled) {
+          for (const entry of entries) {
+            const hash = this.deps.vault.stat(entry.path)
+              ? await localHash(
+                  splitFrontmatter(await this.deps.vault.read(entry.path)).body,
+                  this.deps.vault.cache(entry.path)?.frontmatter,
+                )
+              : undefined;
+            this.block(entry, err.message, hash);
+          }
+        } else this.queue.restore(entries);
+        summary.errors += Math.max(1, entries.length);
+        this.failed(err, "upload");
         break;
+      } finally {
+        this.inflight = [];
+        await this.save();
       }
     }
-    await this.deps.persist();
+    if (summary.errors === 0 && summary.conflicts === 0 && this.failedCount === 0) {
+      try {
+        if (this.state.uploadError && !summary.pushed && !summary.deleted) await this.deps.api.me();
+        this.state.uploadError = null;
+        this.state.lastUploadCheckAt = this.now;
+      } catch (error) {
+        summary.errors++;
+        this.failed(error, "upload");
+      }
+    }
+    if (summary.pushed + summary.deleted > 0) this.state.lastPushAt = this.now;
+    summary.outcome =
+      summary.errors || summary.conflicts || this.failedCount
+        ? summary.pushed + summary.deleted
+          ? "partial"
+          : "failed"
+        : this.queue.size
+          ? "deferred"
+          : summary.pushed + summary.deleted
+            ? "completed"
+            : "no_change";
+    await this.save();
     return summary;
+  }
+
+  private block(entry: QueueEntry, error: string, hash?: string): void {
+    if (this.queue.has(entry.path)) return;
+    (this.state.failures ??= {})[entry.path] = { entry, error, hash };
+    this.state.uploadError = error;
+  }
+
+  private async hasIdentityElsewhere(id: string, path: string): Promise<boolean> {
+    for (const file of this.deps.vault.listMarkdown()) {
+      if (file.path === path) continue;
+      if (isExport(file.path, this.rules) || this.isManaged(file.path)) continue;
+      const cache = this.deps.vault.cache(file.path);
+      if (cache?.frontmatter?.youspot_id === id) return true;
+      if (!cache) {
+        if (!isSyncable(file.path, this.rules) && !isExport(file.path, this.rules)) return true;
+        const content = await this.deps.vault.read(file.path);
+        if (managedIdentity(content)) continue;
+        const raw = splitFrontmatter(content).raw ?? "";
+        if (
+          raw
+            .split(/\r?\n/)
+            .some(
+              (line) =>
+                line === `youspot_id: ${id}` || line === `youspot_id: ${JSON.stringify(id)}`,
+            )
+        )
+          return true;
+      }
+    }
+    return false;
   }
 
   private async pushBatch(entries: QueueEntry[], summary: PushSummary): Promise<void> {
     const notes: PushNote[] = [];
     const hashes = new Map<string, string>();
-    const deletes: { path: string; ref: DeleteRef }[] = [];
+    const deletes: { entry: QueueEntry; ref: DeleteRef }[] = [];
     const exportsByPath = new Map<string, string>();
     for (const [id, entry] of Object.entries(this.state.exports)) exportsByPath.set(entry.path, id);
-
-    const upserts: { entry: QueueEntry; mtime: number }[] = [];
     for (const entry of entries) {
-      if (this.isManaged(entry.path)) continue;
+      if (!isSyncable(entry.path, this.rules) || this.isManaged(entry.path)) continue;
       const meta = this.deps.vault.stat(entry.path);
-      if (entry.kind === "delete" || !meta) {
-        const id = entry.youspotId ?? this.state.notes[entry.path]?.youspot_id;
-        if (id) deletes.push({ path: entry.path, ref: { youspot_id: id } });
+      if (entry.kind === "delete") {
+        if (
+          meta ||
+          (entry.youspotId && (await this.hasIdentityElsewhere(entry.youspotId, entry.path)))
+        )
+          continue;
+        if (!entry.youspotId || !entry.expectedHash) {
+          this.block(entry, "Review this missing note before removing it from Brain.");
+          summary.errors++;
+          continue;
+        }
+        deletes.push({
+          entry,
+          ref: {
+            youspot_id: entry.youspotId,
+            expected_hash: entry.expectedHash,
+            expected_path: entry.expectedPath ?? entry.path,
+            ...(entry.expectedSyncedAt ? { expected_synced_at: entry.expectedSyncedAt } : {}),
+          },
+        });
         continue;
       }
-      upserts.push({ entry, mtime: meta.mtime });
-    }
-
-    const read = await Promise.all(
-      upserts.map(async ({ entry, mtime }) => {
-        const content = await this.deps.vault.read(entry.path);
-        const { body } = splitFrontmatter(content);
-        const cache = this.deps.vault.cache(entry.path);
-        const frontmatter = cache?.frontmatter ?? null;
-        return {
-          entry,
-          mtime,
-          body,
-          frontmatter,
-          tags: cache?.tags ?? [],
-          hash: await localHash(body, frontmatter),
-        };
-      }),
-    );
-
-    for (const item of read) {
-      const { entry } = item;
+      if (!meta) continue;
+      const content = await this.deps.vault.read(entry.path);
+      if (managedIdentity(content)) continue;
+      const cache = this.deps.vault.cache(entry.path);
+      if (!cache) {
+        this.block(entry, "Waiting for note metadata. Rescan after the vault finishes loading.");
+        summary.errors++;
+        continue;
+      }
+      this.observed.add(entry.path);
+      const { body } = splitFrontmatter(content);
+      const hash = await localHash(body, cache.frontmatter);
+      if (this.state.failures?.[entry.path]?.hash === hash && !entry.force) continue;
+      delete this.state.failures?.[entry.path];
       const known = this.state.notes[entry.path];
-      if (known && known.local_hash === item.hash && !known.conflict && !entry.force) continue;
+      if (known?.local_hash === hash && !known.conflict && !entry.force) continue;
       const note = buildNotePayload({
         path: entry.path,
-        body: item.body,
-        frontmatter: item.frontmatter,
-        tags: item.tags,
+        body,
+        frontmatter: cache.frontmatter,
+        tags: cache.tags,
         links: this.deps.vault.resolvedLinks(entry.path),
-        mtime: item.mtime,
+        mtime: meta.mtime,
         youspotId: entry.youspotId ?? known?.youspot_id,
         rules: this.rules,
         exportsByPath,
       });
       if (entry.force) note.force = true;
+      note.restore_deleted = false;
       notes.push(note);
-      hashes.set(entry.path, item.hash);
+      hashes.set(entry.path, hash);
     }
-
     if (notes.length) {
       const res = await this.deps.api.push({
         vault_id: this.state.vaultId,
         vault_name: this.deps.vault.vaultName(),
         notes,
       });
-      const apply = applyPushResults(this.state, res.results, hashes, this.now);
+      const results = notes.map(
+        (note) =>
+          res.results.find((result) => result.path === note.path) ?? {
+            path: note.path,
+            status: "error" as const,
+            error: "Upload acknowledgement missing.",
+          },
+      );
+      const apply = applyPushResults(this.state, results, hashes, this.now);
       summary.pushed += apply.applied;
       summary.conflicts += apply.conflicts.length;
       summary.errors += apply.errors.length;
-      await Promise.all(
-        apply.stamps.map((stamp) =>
-          this.deps.vault.stampFrontmatter(stamp.path, "youspot_id", stamp.youspotId),
-        ),
-      );
-      const byPath = new Map(entries.map((e) => [e.path, e]));
-      for (const error of apply.errors) {
-        const entry = byPath.get(error.path);
-        if (entry && error.error !== "brain_limit_reached") this.queue.requeue(entry);
+      for (const stamp of apply.stamps) {
+        if (this.deps.vault.stat(stamp.path)) {
+          await this.managedWrite(stamp.path, () =>
+            this.deps.vault.stampFrontmatter(stamp.path, "youspot_id", stamp.youspotId),
+          );
+        }
       }
-      if (apply.conflicts.length) {
+      for (const result of [...apply.errors, ...apply.conflicts]) {
+        const entry = entries.find((candidate) => candidate.path === result.path);
+        if (entry)
+          this.block(
+            entry,
+            result.error === "note_removed"
+              ? "Removed from Brain. Use Push this note (overwrite server) to restore it deliberately."
+              : (result.error ??
+                  (result.status === "conflict"
+                    ? "This note was edited in YouSpot. Review the versions before retrying."
+                    : "Note upload failed.")),
+            hashes.get(entry.path),
+          );
+      }
+      for (const note of notes) {
+        if (
+          results.some(
+            (result) =>
+              result.path === note.path &&
+              result.status !== "error" &&
+              result.status !== "conflict",
+          )
+        ) {
+          delete this.state.failures?.[note.path];
+          const meta = this.deps.vault.stat(note.path);
+          if (meta) {
+            const current = splitFrontmatter(await this.deps.vault.read(note.path));
+            if (
+              (await localHash(current.body, this.deps.vault.cache(note.path)?.frontmatter)) !==
+              hashes.get(note.path)
+            ) {
+              this.queue.upsert(note.path, { youspotId: this.state.notes[note.path]?.youspot_id });
+            }
+          }
+        }
+      }
+      if (apply.conflicts.length)
         this.deps.notify(
-          `YouSpot: ${apply.conflicts.length} note${apply.conflicts.length === 1 ? "" : "s"} edited in YouSpot since the last sync. Use "Push this note (overwrite server)" or "Pull server version".`,
+          `YouSpot: ${apply.conflicts.length} notes edited in YouSpot. Review the versions in settings.`,
         );
-      }
-      if (res.brain_limit) {
+      if (res.brain_limit)
         this.deps.notify(
           `YouSpot: Brain limit reached (${res.brain_limit.count}/${res.brain_limit.cap}).`,
         );
-      }
-      this.state.lastPushAt = this.now;
     }
-
     if (deletes.length) {
-      await this.deps.api.deleteNotes(
+      const res = await this.deps.api.deleteNotes(
         this.state.vaultId,
-        deletes.map((d) => d.ref),
+        deletes.map((item) => item.ref),
       );
-      forgetDeleted(
-        this.state,
-        deletes.map((d) => d.path),
-      );
-      summary.deleted += deletes.length;
-      this.state.lastPushAt = this.now;
+      for (const [index, item] of deletes.entries()) {
+        const result = res.results[index];
+        if (result && ["deleted", "already_deleted", "not_found"].includes(result.status)) {
+          forgetDeleted(this.state, [item.entry.path]);
+          delete this.state.missing?.[item.entry.path];
+          delete this.state.failures?.[item.entry.path];
+          summary.deleted++;
+        } else {
+          this.block(item.entry, "The Brain note changed. Review it before removing it.");
+          summary.conflicts++;
+        }
+      }
     }
-    this.state.lastError = null;
   }
 
   pull(): Promise<PullSummary> {
     if (this.refreshing) return Promise.resolve({ written: 0, trashed: 0 });
-    if (this.state.refresh) return this.refresh().then(() => ({ written: 0, trashed: 0 }));
     if (this.pulling) return this.pulling;
-    this.pulling = this.runPull().finally(() => {
+    this.pulling = (async () => {
+      if (this.pushing) await this.pushing;
+      return this.runPull();
+    })().finally(() => {
       this.pulling = null;
       this.deps.onStatus?.();
     });
@@ -391,6 +612,7 @@ export class SyncEngine {
 
   private async runPull(): Promise<PullSummary> {
     const summary: PullSummary = { written: 0, trashed: 0 };
+    this.state.lastDownloadAttemptAt = this.now;
     if (!this.configured || this.halted || !this.settings.pullEnabled) return summary;
     this.deps.onStatus?.();
     const types: string[] = [];
@@ -416,20 +638,30 @@ export class SyncEngine {
         if (!res.has_more) break;
         page += 1;
       }
+      await recoverManaged(this.deps.vault, this.state, this.rules);
       const plan = await planPull(objects, tombstones, this.state, this.settings, this.rules);
       this.state.exportConflicts = [];
       await this.applyPull(plan.actions, summary);
-      forgetDeleted(this.state, plan.forgetNotes);
-      for (const path of plan.forgetNotes) this.queue.upsert(path);
+      for (const path of plan.forgetNotes) {
+        this.queue.cancel(path);
+        const note = this.state.notes[path];
+        if (note) {
+          this.block(
+            { path, kind: "upsert", youspotId: note.youspot_id, attempts: 0 },
+            "Removed from Brain. Use Push this note (overwrite server) to restore it deliberately.",
+            note.local_hash,
+          );
+        }
+      }
       this.state.serverEdited = plan.serverEdited;
       this.state.watermark = nextSince;
       this.state.lastPullAt = this.now;
-      this.state.lastError = null;
+      this.state.downloadError = null;
       this.backoffMs = MIN_BACKOFF;
     } catch (err) {
-      this.failed(err);
+      this.failed(err, "download");
     }
-    await this.deps.persist();
+    await this.save();
     if (this.queue.size > 0) this.schedule();
     return summary;
   }
@@ -440,6 +672,22 @@ export class SyncEngine {
       const previous = this.deps.vault.stat(action.path)
         ? await this.deps.vault.read(action.path)
         : null;
+      if (
+        action.kind === "write" &&
+        previous !== null &&
+        managedIdentity(previous) === action.objectId &&
+        (await sha256Hex(previous)) === action.hash
+      ) {
+        this.state.exports[action.objectId] = {
+          ...existing,
+          path: action.path,
+          type: action.type,
+          rendered_hash: action.hash,
+          updated_at: action.updatedAt,
+        };
+        await this.save();
+        continue;
+      }
       if (
         previous !== null &&
         (!existing || (await sha256Hex(previous)) !== existing.rendered_hash)
@@ -471,7 +719,7 @@ export class SyncEngine {
         updated_at: action.updatedAt,
       };
       summary.written += 1;
-      await this.deps.persist();
+      await this.save();
     }
   }
 
@@ -484,34 +732,93 @@ export class SyncEngine {
     }
   }
 
-  async reconcile(): Promise<void> {
+  private discover(): Promise<void> {
+    if (this.scanning) return this.scanning;
+    this.scanning = this.scan().finally(() => {
+      this.scanning = null;
+    });
+    return this.scanning;
+  }
+
+  private async scan(): Promise<void> {
     if (!this.configured || this.halted) return;
     const plan = planReconcile(
       this.deps.vault.listMarkdown().filter((file) => !this.isManaged(file.path)),
       this.state,
       this.rules,
     );
-    for (const path of plan.upserts) {
-      this.queue.upsert(path, { youspotId: this.state.notes[path]?.youspot_id });
+    for (const [index, path] of plan.upserts.entries()) {
+      if (this.halted) break;
+      if (index > 0 && index % BATCH_SIZE === 0) {
+        await new Promise<void>((resolve) => this.setTimer(resolve, 0));
+      }
+      const content = await this.deps.vault.read(path);
+      if (managedIdentity(content)) continue;
+      const cache = this.deps.vault.cache(path);
+      if (!cache) continue;
+      this.observed.add(path);
+      const known = this.state.notes[path];
+      const hash = await localHash(splitFrontmatter(content).body, cache.frontmatter);
+      const failed = this.state.failures?.[path];
+      if (failed?.hash === hash || failed?.error.startsWith("Removed from Brain.")) continue;
+      if (!known || known.local_hash !== hash) {
+        delete this.state.failures?.[path];
+        this.queue.upsert(path, { youspotId: known?.youspot_id });
+      }
+      delete this.state.missing?.[path];
     }
-    for (const gone of plan.deletes) this.queue.remove(gone.path, gone.youspotId);
+    await this.save();
+  }
+
+  async reconcile(): Promise<void> {
+    if (!this.configured || this.halted || this.refreshing) return;
+    await this.discover();
     try {
+      const missing: NonNullable<PluginData["state"]["missing"]> = {};
       let page = 1;
       for (;;) {
         const res = await this.deps.api.inventory(this.state.vaultId, page);
         for (const note of res.notes) {
-          if (this.deps.vault.stat(note.path)) continue;
-          if (this.state.notes[note.path]) continue;
-          this.queue.remove(note.path, note.object_id);
+          if (
+            !isSyncable(note.path, this.rules) ||
+            this.deps.vault.stat(note.path) ||
+            (await this.hasIdentityElsewhere(note.object_id, note.path))
+          )
+            continue;
+          missing[note.path] = {
+            objectId: note.object_id,
+            path: note.path,
+            contentHash: note.content_hash,
+            serverEdited: note.server_edited,
+            syncedAt: note.synced_at ?? undefined,
+          };
         }
         if (page * res.per_page >= res.total) break;
-        page += 1;
+        page++;
       }
+      this.state.missing = missing;
     } catch (err) {
-      this.failed(err);
+      this.failed(err, "upload");
+      await this.save();
       return;
     }
+    await this.save();
     await this.push();
+  }
+
+  async removeMissing(path: string): Promise<PushSummary> {
+    const note = this.state.missing?.[path];
+    if (
+      !note ||
+      note.serverEdited ||
+      this.deps.vault.exists(path) ||
+      (await this.hasIdentityElsewhere(note.objectId, path))
+    ) {
+      return { pushed: 0, deleted: 0, conflicts: 0, errors: 1, outcome: "failed" };
+    }
+    this.queue.remove(path, note.objectId, note.contentHash, path, note.syncedAt);
+    await this.save();
+    return this.push();
   }
 
   async pullServerVersion(path: string): Promise<string | null> {
@@ -533,37 +840,31 @@ export class SyncEngine {
   }
 
   resetState(): void {
-    this.queue.clear();
-    const { vaultId, exports, pendingWrites, refresh, refreshReport } = this.state;
-    this.deps.data.state = {
-      vaultId,
-      notes: {},
-      exports,
-      pendingWrites,
-      refresh,
-      refreshReport,
-      watermark: null,
-      lastPushAt: null,
-      lastPullAt: null,
-      lastError: null,
-      serverEdited: [],
-    };
+    this.state.watermark = null;
+    this.state.failures = Object.fromEntries(
+      Object.entries(this.state.failures ?? {}).filter(([, failure]) =>
+        failure.error.startsWith("Removed from Brain."),
+      ),
+    );
+    this.state.uploadError = null;
+    this.state.downloadError = null;
     this.resume();
+    this.changed();
   }
 
-  private failed(err: unknown): void {
+  private failed(err: unknown, direction: "upload" | "download" | "refresh"): void {
     const message = err instanceof Error ? err.message : String(err);
-    this.state.lastError = message;
-    if (err instanceof ApiError && err.unauthorized) {
+    this.state[`${direction}Error`] = message;
+    this.state.lastError =
+      this.state.uploadError ?? this.state.downloadError ?? this.state.refreshError ?? null;
+    if (err instanceof ApiError && (err.unauthorized || err.disabled)) {
       this.halted = true;
       this.stop();
-      this.deps.notify("YouSpot: token rejected. Check the token in settings.");
-      return;
-    }
-    if (err instanceof ApiError && err.disabled) {
-      this.halted = true;
-      this.stop();
-      this.deps.notify("YouSpot: sync is not enabled on this account yet.");
+      this.deps.notify(
+        err.unauthorized
+          ? "YouSpot: token rejected. Check the token in settings."
+          : "YouSpot: sync is not enabled on this account yet.",
+      );
       return;
     }
     if (err instanceof ApiError && err.retryable) {

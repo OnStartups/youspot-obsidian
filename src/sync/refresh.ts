@@ -5,6 +5,7 @@ import { type BrainArchive, readArchive, relocateDocument, safePath } from "./ar
 import { hashBytes, sha256Hex } from "./hash";
 import { dirname, exportRoot, isInFolder, isSyncable, joinPath, safeFileName } from "./paths";
 import { applyCapabilities } from "./state";
+import { managedIdentity, recoverManaged } from "./managed";
 
 export interface RefreshDeps {
   vault: VaultPort;
@@ -32,6 +33,7 @@ export async function applyArchive(
   const root = exportRoot(rules);
   if (!safePath(root) || !rules.syncFolder || !rules.exportFolder)
     throw new Error("Choose safe sync and export folders before refreshing.");
+  await recoverManaged(vault, state, rules);
   const paths = new Map<string, string | null>();
   const originals = new Map<string, string>();
   const taken = new Set(vault.listPaths().map((path) => path.toLocaleLowerCase()));
@@ -39,6 +41,7 @@ export async function applyArchive(
   const report: RefreshReport = {
     runId,
     written: 0,
+    current: 0,
     originals: 0,
     assets: 0,
     conflicts: [],
@@ -137,6 +140,19 @@ export async function applyArchive(
       }
       previous = await vault.read(path);
       const actual = await sha256Hex(previous);
+      if (actual === hash && managedIdentity(previous) === id) {
+        state.exports[id] = {
+          path,
+          type: record.type,
+          rendered_hash: hash,
+          updated_at: record.updated_at,
+          projection_version: 1,
+        };
+        delete state.pendingWrites?.[id];
+        report.current = (report.current ?? 0) + 1;
+        await deps.persist();
+        continue;
+      }
       if (
         actual !== existing?.rendered_hash &&
         !(pending?.path === path && actual === pending.hash)
@@ -251,7 +267,7 @@ export async function refreshBrain(deps: RefreshDeps): Promise<RefreshReport | n
   data.state.lastPullAt = Date.now();
   await deps.persist();
   deps.notify(
-    `YouSpot: ${report.written} documents refreshed, ${report.originals} originals kept, ${report.assets} attachments, ${report.conflicts.length} local conflicts. See the refresh report in settings.`,
+    `YouSpot: ${report.written} documents refreshed, ${report.current ?? 0} already current, ${report.originals} originals recognized in this selection, ${report.assets} attachments, ${report.conflicts.length} local conflicts. See the refresh report in settings.`,
   );
   return report;
 }

@@ -26,11 +26,11 @@ Then enable YouSpot under Settings, Community plugins.
 ## Connect it
 
 1. In YouSpot, open Settings, Integrations, Obsidian, and create a token.
-2. In Obsidian, open Settings, YouSpot, and paste the token in.
+2. In Obsidian, open Settings, YouSpot, and paste the token in and press **Save and connect**.
 3. Choose the folder to sync. Start with a small one.
 4. Run **YouSpot: Sync now** from the command palette, or click the brain icon in the ribbon.
 
-The token is stored in plain text in `.obsidian/plugins/youspot/data.json`. If your vault is a git repository, add that path to its `.gitignore` before you paste the token. The plugin's settings screen has a button to copy the line.
+Starting with 0.3.1, tokens use Obsidian's local SecretStorage. Connect each installation locally. Only preferences and the stable vault ID travel through `data.json`; runtime state uses local IndexedDB, scoped to the server, account, vault and folders. Upgrade every active installation. Migration retains note identities and selections, verifies local persistence before cleaning shared data, and does not resume another installation's refresh. Reconnect locally if another installation upgraded first. Versions 0.3.0 and earlier stored plaintext tokens in `data.json`; keep that file out of git and revoke exposed tokens.
 
 ## How conflicts work
 
@@ -43,32 +43,40 @@ There is no automatic merging.
 
 ## Full Brain export (0.3.0)
 
-Requires Obsidian 1.13.0 or later and the backend export adapter. Press **Check** or **Reload options** in settings, choose an owned Brain, content types and attachment mode, then run **Full refresh Brain export**. The backend discovers selectable types and approved fields from the same registry as web archives. Existing users keep their selections; newly supported types stay off until selected.
+Requires Obsidian 1.13.0 or later and the backend export adapter. Press **Save and connect** or **Reload options** in settings, choose an owned Brain, content types and attachment mode, then run **Full refresh Brain export**. The backend discovers selectable types and approved fields from the same registry as web archives. Existing users keep their selections; newly supported types stay off until selected.
 
 A full refresh captures the entire selection, independent of the legacy incremental watermark. Documents use the shared archive renderer, including full stored bodies, approved fields, directed relationships and the same coverage limits. Fresh files use collision-safe paths under `<sync folder>/YouSpot/documents/`. Existing safe managed paths are retained when titles change. Links resolve across the complete inventory, including original notes already present in this vault. Notes from other vaults are included normally.
 
 **Include available attachments** downloads captured bytes using short-lived private URLs. The account bearer is sent only to the configured backend, never to the download host. Attachments are verified by SHA-256 and stored locally under `assets/`. Text-only mode and unavailable bytes appear in the coverage report. Arbitrary attachment uploads remain outside this feature.
 
-The plugin compares actual file bytes with the last successful exported hash before overwriting. Local edits and unmanaged files are preserved, with conflicts listed in **Last refresh report**. Restore the previous exported bytes to accept a refresh, or copy your edits to a separate note and delete the managed file before refreshing. Deselecting a type does not remove its files. Resetting note sync preserves managed export hashes and pending refresh progress.
+The plugin recognizes managed files already matching the desired bytes before checking stale local baselines. Otherwise it compares actual bytes with the last successful local exported hash before overwriting. Local edits and unmanaged files are preserved, with conflicts listed in **Last refresh report**. Restore the previous exported bytes to accept a refresh, or copy your edits to a separate note and delete the managed file before refreshing. Deselecting a type does not remove its files. Resetting note sync preserves managed export hashes and pending refresh progress.
 
 Refreshes run on the backend queue. A queued refresh continues on the next background sync; **Continue refresh** checks sooner when the interval is off. Progress is saved before file writes, so an interrupted refresh resumes using the same captured archive. Completed delivery releases its private archive; unfinished runs expire after seven days. Web and plugin exports share the one-active-run and three-retained-run account limits. The current envelope is 20,000 records, 2,000 attachments, 20 MiB per attachment and 50 MiB total archive content. The ZIP is bounded in memory; NDJSON records are decoded one line at a time.
 
-**Background sync remains the legacy incremental path.** It continues syncing editable original notes and unconverted legacy exports. Once a managed file has received the richer full export, legacy rendering and tombstones cannot downgrade or delete it. Run another full refresh to update these files, including field-only and relationship-only edits. Full refresh does not automatically remove documents deleted on the server. Durable acknowledged incremental baselines and complete deletion reconciliation remain separate work.
+**Background sync remains the legacy incremental path.** It continues syncing editable original notes and unconverted legacy exports. Once a managed file has received the richer full export, legacy rendering and tombstones cannot downgrade or delete it. Run another full refresh to update these files, including field-only and relationship-only edits. Full refresh does not automatically remove documents deleted on the server. Full-export deletion reconciliation remains separate work.
 
 The last refresh report includes local conflicts plus the archive's missing content, exclusions and unavailable attachments. Review it before treating the export as complete. Files are local exports, not a promise of full account backup or archive restoration.
 
 ## Commands
 
-| Command                           | Does                                                     |
-| --------------------------------- | -------------------------------------------------------- |
-| Sync now                          | Push pending notes, then pull Brain changes              |
-| Push this note                    | Push the active note immediately                         |
-| Push this note (overwrite server) | Same, but win over an edit made in YouSpot               |
-| Pull Brain now                    | Pull only                                                |
-| Pull server version of this note  | Write the YouSpot copy beside the note                   |
-| Reconcile folder                  | Rescan the folder against local state and the server     |
-| Open in YouSpot                   | Open the active note's object page                       |
-| Reset sync state                  | Re-scan notes while preserving managed export protection |
+| Command                           | Does                                                                |
+| --------------------------------- | ------------------------------------------------------------------- |
+| Sync now                          | Rescan originals, upload changes, then download or continue refresh |
+| Push this note                    | Push the active note immediately                                    |
+| Push this note (overwrite server) | Same, but win over an edit made in YouSpot                          |
+| Pull Brain now                    | Pull only                                                           |
+| Pull server version of this note  | Write the YouSpot copy beside the note                              |
+| Reconcile folder                  | Rescan the folder against local state and the server                |
+| Open in YouSpot                   | Open the active note's object page                                  |
+| Reset sync state                  | Re-scan notes while preserving managed export protection            |
+
+## Recovery (0.3.1)
+
+The settings screen separates acknowledged uploads, attempts and checks from downloads. Failed originals remain visible after restarting; **Retry failed** retries them after the cause is resolved. A successful download does not clear an upload problem. Sync now and periodic recovery compare original content hashes, including changes missed while the plugin was disabled.
+
+A missing file is never deleted from Brain by a scan. Missing originals have a review list with **Open in YouSpot** and a confirmed **Remove from Brain** action. Let cloud delivery finish first. A previously observed original deleted during a running session uses a conditional delete, which rejects intervening server changes or renames. Moving a note outside the folder or resetting state does not delete Brain content. Server-removed originals need **Push this note (overwrite server)** to restore deliberately.
+
+Rescans preserve managed export protection and refresh progress. Already-current cloud-delivered exports refresh their local baseline without rewrites; divergent local edits remain conflicts. Queued full refreshes leave original uploads time to run.
 
 ## What the plugin accesses
 
@@ -98,8 +106,7 @@ which is how it finds the notes in your folder and how the folder picker offers 
 That is a list of paths. Files outside your chosen folder are never opened, and their contents are
 never read or sent.
 
-**Clipboard.** One button writes to the clipboard: the one on the settings screen that copies the
-`.gitignore` line for your token file. The plugin never reads the clipboard.
+**Clipboard.** Copy diagnostics writes a summary with versions, folder names, counts and error codes, excluding tokens and note contents. The plugin never reads the clipboard.
 
 ## Building
 

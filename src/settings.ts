@@ -1,12 +1,14 @@
 import {
   type App,
+  apiVersion,
   Modal,
   Notice,
   PluginSettingTab,
   Setting,
   type SettingDefinitionItem,
 } from "obsidian";
-import { ApiError } from "./api";
+import { diagnosticSummary } from "./diagnostics";
+import { relativeTime } from "./status";
 import { FolderSuggest } from "./folder-suggest";
 import type YouSpotPlugin from "./main";
 import { DEFAULT_SETTINGS, applyCapabilities } from "./sync/state";
@@ -15,10 +17,6 @@ import type { YouSpotSettings } from "./types";
 export { DEFAULT_SETTINGS };
 
 const PLUGIN_PAGE = "https://community.obsidian.md/plugins/youspot";
-
-function gitignoreLine(app: App): string {
-  return `${app.vault.configDir}/plugins/youspot/data.json`;
-}
 
 class ConfirmModal extends Modal {
   constructor(
@@ -52,6 +50,10 @@ class ConfirmModal extends Modal {
 }
 
 export class YouSpotSettingTab extends PluginSettingTab {
+  private healthSetting?: Setting;
+  private failuresSetting?: Setting;
+  private missingSetting?: Setting;
+  private statusSignature = "";
   constructor(
     app: App,
     private readonly plugin: YouSpotPlugin,
@@ -63,6 +65,37 @@ export class YouSpotSettingTab extends PluginSettingTab {
     return this.plugin.prefs;
   }
 
+  updateStatus(): void {
+    const state = this.plugin.state;
+    const signature = JSON.stringify([
+      Math.floor(Date.now() / 60_000),
+      state.lastPushAt,
+      state.lastPullAt,
+      state.lastUploadAttemptAt,
+      state.lastUploadCheckAt,
+      state.pending?.length,
+      Object.keys(state.notes).length,
+      Object.keys(state.exports).length,
+      state.failures,
+      state.missing,
+      state.uploadError,
+      state.downloadError,
+      state.refreshError,
+    ]);
+    if (signature === this.statusSignature) return;
+    this.statusSignature = signature;
+    for (const [setting, render] of [
+      [this.healthSetting, (item: Setting) => this.renderHealth(item)],
+      [this.failuresSetting, (item: Setting) => this.renderFailures(item)],
+      [this.missingSetting, (item: Setting) => this.renderMissing(item)],
+    ] as const) {
+      if (!setting?.settingEl.isConnected) continue;
+      setting.descEl.empty();
+      setting.controlEl.empty();
+      render(setting);
+    }
+  }
+
   override getControlValue(key: string): unknown {
     if (key.startsWith("export:")) {
       return this.prefs.exportTypes[key.slice("export:".length)] === true;
@@ -71,12 +104,12 @@ export class YouSpotSettingTab extends PluginSettingTab {
   }
 
   override async setControlValue(key: string, value: unknown): Promise<void> {
-    if (key.startsWith("export:")) {
-      this.prefs.exportTypes[key.slice("export:".length)] = Boolean(value);
-    } else {
-      Object.assign(this.prefs, { [key]: value });
-    }
-    await this.plugin.saveSettings();
+    const patch = key.startsWith("export:")
+      ? {
+          exportTypes: { ...this.prefs.exportTypes, [key.slice("export:".length)]: Boolean(value) },
+        }
+      : { [key]: value };
+    await this.plugin.run(() => this.plugin.updateSettings(patch));
   }
 
   override getSettingDefinitions(): SettingDefinitionItem[] {
@@ -87,15 +120,14 @@ export class YouSpotSettingTab extends PluginSettingTab {
         items: [
           {
             name: "Token",
-            desc: 'Mint a token named "Obsidian" on the YouSpot integrations MCP tab and paste it here.',
+            desc: "Create a token on the YouSpot Obsidian integration page, paste it here, and save the connection on this installation.",
             aliases: ["api key", "connect", "sign in"],
             render: (setting) => this.renderToken(setting),
           },
           {
-            name: "Keep the token out of Git",
-            desc: "It is stored in plain text inside this vault.",
-            aliases: ["gitignore", "secret", "security"],
-            render: (setting) => this.renderGitignore(setting),
+            name: "Local connection",
+            desc: "The token is kept in Obsidian secret storage on this installation. It is not written to the shared plugin data file.",
+            aliases: ["secret", "security"],
           },
           {
             name: "API base",
@@ -170,13 +202,19 @@ export class YouSpotSettingTab extends PluginSettingTab {
               setting.addButton((button) =>
                 button.setButtonText("Reload options").onClick(async () => {
                   try {
-                    const me = await this.plugin.api.me();
-                    applyCapabilities(this.prefs, await this.plugin.api.capabilities());
-                    this.prefs.capabilitiesAccount = me.email;
-                    await this.plugin.saveSettings();
+                    await this.plugin.api.me();
+                    const next = { ...this.prefs, exportTypes: { ...this.prefs.exportTypes } };
+                    applyCapabilities(next, await this.plugin.api.capabilities());
+                    await this.plugin.updateSettings({
+                      exportTypes: next.exportTypes,
+                      exportSpaceId: next.exportSpaceId,
+                      selectionInitialized: next.selectionInitialized,
+                    });
                     this.update();
                   } catch (error) {
-                    new Notice(String(error));
+                    await this.plugin.run(async () => {
+                      throw error;
+                    });
                   }
                 }),
               );
@@ -190,8 +228,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
                 for (const space of this.prefs.capabilities?.spaces ?? [])
                   dropdown.addOption(space.id, space.name);
                 dropdown.setValue(this.prefs.exportSpaceId).onChange(async (value) => {
-                  this.prefs.exportSpaceId = value;
-                  await this.plugin.saveSettings();
+                  await this.plugin.run(() => this.plugin.updateSettings({ exportSpaceId: value }));
                 });
               });
             },
@@ -205,8 +242,11 @@ export class YouSpotSettingTab extends PluginSettingTab {
                   .addOption("available", "Include available attachments")
                   .setValue(this.prefs.attachments)
                   .onChange(async (value) => {
-                    this.prefs.attachments = value === "available" ? "available" : "none";
-                    await this.plugin.saveSettings();
+                    await this.plugin.run(() =>
+                      this.plugin.updateSettings({
+                        attachments: value === "available" ? "available" : "none",
+                      }),
+                    );
                   }),
               );
             },
@@ -218,10 +258,13 @@ export class YouSpotSettingTab extends PluginSettingTab {
               setting.addButton((button) =>
                 button
                   .setButtonText(this.plugin.state.refresh ? "Continue refresh" : "Full refresh")
-                  .onClick(async () => {
-                    await this.plugin.engine.refresh();
-                    this.update();
-                  }),
+                  .onClick(
+                    () =>
+                      void this.plugin.run(async () => {
+                        await this.plugin.engine.refresh();
+                        await this.plugin.engine.push();
+                      }),
+                  ),
               );
               if (this.plugin.state.refresh)
                 setting.addButton((button) =>
@@ -245,7 +288,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
                 return;
               }
               setting.setDesc(
-                `Documents written: ${report.written}. Originals kept: ${report.originals}. Attachments: ${report.assets}. Conflicts: ${report.conflicts.length}.`,
+                `Documents written: ${report.written}. Already current: ${report.current ?? 0}. Originals recognized in this selection: ${report.originals}. Attachments: ${report.assets}. Conflicts: ${report.conflicts.length}.`,
               );
               for (const conflict of report.conflicts)
                 setting.descEl.createEl("p", { text: `${conflict.path}: ${conflict.reason}` });
@@ -286,7 +329,54 @@ export class YouSpotSettingTab extends PluginSettingTab {
       },
       {
         type: "group",
-        heading: "Danger zone",
+        heading: "Sync health and recovery",
+        items: [
+          {
+            name: "Uploads and downloads",
+            render: (setting) => {
+              this.healthSetting = setting;
+              this.renderHealth(setting);
+            },
+          },
+          {
+            name: "Failed originals",
+            render: (setting) => {
+              this.failuresSetting = setting;
+              this.renderFailures(setting);
+            },
+          },
+          {
+            name: "Missing originals",
+            render: (setting) => {
+              this.missingSetting = setting;
+              this.renderMissing(setting);
+            },
+          },
+          {
+            name: "Copy diagnostic summary",
+            desc: "Includes selected folder names, versions, counts and error codes. No tokens or note contents are included.",
+            render: (setting) =>
+              setting.addButton((button) =>
+                button.setButtonText("Copy diagnostics").onClick(
+                  () =>
+                    void this.plugin.run(async () => {
+                      await navigator.clipboard.writeText(
+                        diagnosticSummary(
+                          this.plugin.data,
+                          apiVersion,
+                          this.plugin.manifest.version,
+                        ),
+                      );
+                      new Notice("YouSpot: diagnostic summary copied.");
+                    }),
+                ),
+              ),
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Repair",
         items: [
           {
             name: "Vault ID",
@@ -296,19 +386,18 @@ export class YouSpotSettingTab extends PluginSettingTab {
             },
           },
           {
-            name: "Reset sync state",
+            name: "Rescan and retry originals",
             desc: "Re-scan original notes. Managed export hashes and pending refresh progress are kept to protect local files.",
             render: (setting) => {
               setting.addButton((b) =>
                 b
-                  .setButtonText("Reset")
-                  .setDestructive()
+                  .setButtonText("Rescan")
                   .onClick(() =>
                     new ConfirmModal(
                       this.app,
-                      "Reset YouSpot sync state?",
+                      "Rescan original notes?",
                       "Notes in YouSpot are kept. Original notes will be re-scanned; existing managed exports remain protected.",
-                      () => void this.plugin.resetSyncState(),
+                      () => void this.plugin.run(() => this.plugin.resetSyncState()),
                     ).open(),
                   ),
               );
@@ -336,71 +425,127 @@ export class YouSpotSettingTab extends PluginSettingTab {
       cls: "youspot-settings-account",
       text: this.plugin.accountEmail
         ? `Connected as ${this.plugin.accountEmail}`
-        : "Not connected yet.",
+        : "Not connected on this installation.",
     });
-    setting.addText((t) => {
-      t.inputEl.type = "password";
-      t.inputEl.addClass("youspot-wide-input");
-      t.setPlaceholder("mcp_…")
-        .setValue(this.prefs.token)
-        .onChange(async (value) => {
-          this.prefs.token = value.trim();
-          await this.plugin.saveSettings();
+    let draft = this.prefs.token;
+    setting.addText((text) => {
+      text.inputEl.type = "password";
+      text.inputEl.addClass("youspot-wide-input");
+      text
+        .setPlaceholder("mcp_…")
+        .setValue(draft)
+        .onChange((value) => {
+          draft = value.trim();
         });
     });
-    setting.addButton((b) =>
-      b.setButtonText("Check").onClick(async () => {
-        try {
-          const me = await this.plugin.api.me();
-          this.plugin.accountEmail = me.email;
-          applyCapabilities(this.prefs, await this.plugin.api.capabilities());
-          this.prefs.capabilitiesAccount = me.email;
-          await this.plugin.saveSettings();
-          this.plugin.engine.resume();
-          new Notice(
-            `YouSpot: connected as ${me.email} (${me.brain_count} objects in your Brain).`,
-          );
-        } catch (err) {
-          const message =
-            err instanceof ApiError && err.unauthorized ? "token rejected" : String(err);
-          new Notice(`YouSpot: ${message}`);
-        }
-        this.update();
-      }),
+    setting.addButton((button) =>
+      button
+        .setButtonText("Save and connect")
+        .onClick(() => void this.plugin.run(() => this.plugin.updateSettings({ token: draft }))),
     );
-    setting.addButton((b) =>
-      b.setButtonText("Disconnect").onClick(async () => {
-        this.prefs.token = "";
-        this.plugin.accountEmail = null;
-        await this.plugin.saveSettings();
-        this.update();
-      }),
+    setting.addButton((button) =>
+      button
+        .setButtonText("Disconnect")
+        .onClick(() => void this.plugin.run(() => this.plugin.updateSettings({ token: "" }))),
     );
   }
 
-  private renderGitignore(setting: Setting): void {
-    setting.descEl.createEl("p", {
-      text: "If the vault is in Git or synced elsewhere, keep the plugin data file out of it:",
-    });
-    setting.descEl.createEl("p").createEl("code", { text: gitignoreLine(this.app) });
-    setting.addButton((b) =>
-      b.setButtonText("Copy line").onClick(async () => {
-        await navigator.clipboard.writeText(`${gitignoreLine(this.app)}\n`);
-        new Notice("Copied.");
-      }),
+  private renderHealth(setting: Setting): void {
+    const state = this.plugin.state;
+    const ago = (value: number | null | undefined) =>
+      value ? relativeTime(value, Date.now()) : "never";
+    for (const text of [
+      `Last acknowledged upload: ${ago(state.lastPushAt)}. Last upload attempt: ${ago(state.lastUploadAttemptAt)}.`,
+      `Last successful upload check: ${ago(state.lastUploadCheckAt)}. Pending originals: ${state.pending?.length ?? 0}.`,
+      `Last successful download: ${ago(state.lastPullAt)}.`,
+      `Tracked originals: ${Object.keys(state.notes).length}. Managed export baselines: ${Object.keys(state.exports).length}.`,
+      state.uploadError ? `Upload needs attention: ${state.uploadError}` : "",
+      state.downloadError ? `Download needs attention: ${state.downloadError}` : "",
+      state.refreshError ? `Full refresh needs attention: ${state.refreshError}` : "",
+    ].filter(Boolean))
+      setting.descEl.createEl("p", { text });
+    setting.addButton((button) =>
+      button
+        .setButtonText("Sync now")
+        .onClick(() => void this.plugin.run(() => this.plugin.syncNow())),
     );
+  }
+
+  private renderFailures(setting: Setting): void {
+    const failures = Object.values(this.plugin.state.failures ?? {});
+    setting.setDesc(
+      failures.length
+        ? `${failures.length} original${failures.length === 1 ? " needs" : "s need"} attention. Retry after resolving the reported problem.`
+        : "No failed originals.",
+    );
+    for (const failure of failures.slice(0, 25)) {
+      setting.descEl.createEl("p", { text: `${failure.entry.path}: ${failure.error}` });
+    }
+    if (failures.length)
+      setting.addButton((button) =>
+        button
+          .setButtonText("Retry failed")
+          .onClick(() => void this.plugin.run(() => this.plugin.engine.retryFailed())),
+      );
+  }
+
+  private renderMissing(setting: Setting): void {
+    const missing = Object.values(this.plugin.state.missing ?? {});
+    setting.setDesc(
+      missing.length
+        ? `${missing.length} Brain originals were not found here. Let cloud delivery finish first. Removing a note requires confirmation.`
+        : "No missing originals found in the last folder scan.",
+    );
+    setting.addButton((button) =>
+      button
+        .setButtonText("Rescan folder")
+        .onClick(() => void this.plugin.run(() => this.plugin.engine.reconcile())),
+    );
+    for (const note of missing.slice(0, 25)) {
+      const row = new Setting(setting.descEl)
+        .setName(note.path)
+        .setDesc(
+          note.serverEdited
+            ? "Edited in YouSpot. Review it there before removing it."
+            : "Missing here; it may still exist on another installation.",
+        );
+      row.addButton((button) =>
+        button
+          .setButtonText("Open in YouSpot")
+          .onClick(() =>
+            window.open(
+              `${this.prefs.appBase.replace(/\/+$/, "")}/graph/object/${encodeURIComponent(note.objectId)}`,
+              "_blank",
+              "noopener,noreferrer",
+            ),
+          ),
+      );
+      row.addButton((button) =>
+        button
+          .setButtonText("Remove from Brain")
+          .setDisabled(note.serverEdited)
+          .onClick(() =>
+            new ConfirmModal(
+              this.app,
+              "Remove this original from Brain?",
+              `${note.path} may still exist on another installation. This removes its Brain record, not the local file.`,
+              () => void this.plugin.run(() => this.plugin.engine.removeMissing(note.path)),
+            ).open(),
+          ),
+      );
+    }
   }
 
   private renderSyncFolder(setting: Setting): void {
     setting.addText((t) => {
-      t.setPlaceholder("knowledge").setValue(this.prefs.syncFolder);
+      t.setPlaceholder("Knowledge").setValue(this.prefs.syncFolder);
       new FolderSuggest(this.app, t.inputEl, (folder) => {
-        this.prefs.syncFolder = folder;
-        void this.plugin.saveSettings();
+        void this.plugin.run(() => this.plugin.updateSettings({ syncFolder: folder }));
       });
       t.onChange(async (value) => {
-        this.prefs.syncFolder = value.trim().replace(/^\/+|\/+$/g, "");
-        await this.plugin.saveSettings();
+        await this.plugin.run(() =>
+          this.plugin.updateSettings({ syncFolder: value.trim().replace(/^\/+|\/+$/g, "") }),
+        );
       });
     });
   }
@@ -408,7 +553,9 @@ export class YouSpotSettingTab extends PluginSettingTab {
   private renderHelp(setting: Setting): void {
     const list = setting.descEl.createEl("ol", { cls: "youspot-settings-steps" });
     list.createEl("li", { text: "Create a token on the Obsidian tab of YouSpot integrations." });
-    list.createEl("li", { text: "Paste it above and press Check." });
+    list.createEl("li", {
+      text: "Paste your token, then connect this installation.",
+    });
     list.createEl("li", {
       text: "Choose a sync folder. Nothing moves until you do, so the rest of the vault stays put.",
     });

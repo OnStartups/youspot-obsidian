@@ -41,9 +41,7 @@ export async function planPull(
   for (const obj of objects) {
     if (
       vaultNotes.has(obj.object_id) ||
-      (obj.obsidian?.vault_id === state.vaultId &&
-        obj.obsidian.path &&
-        vaultNotes.get(obj.object_id) === obj.obsidian.path)
+      (obj.obsidian?.vault_id === state.vaultId && obj.obsidian.path)
     ) {
       if (obj.server_edited) plan.serverEdited.push(obj.object_id);
       continue;

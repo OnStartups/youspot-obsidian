@@ -61,7 +61,9 @@ export class ApiError extends Error {
 function parseJson(text: string): Record<string, unknown> | null {
   try {
     const value = JSON.parse(text) as unknown;
-    return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
@@ -96,6 +98,10 @@ export class ApiClient {
       throw new ApiError(code ?? `${path} failed with ${res.status}`, res.status, code);
     }
     if (!json) throw new ApiError(`${path} returned no JSON`, res.status, "bad_json");
+    if (json.success === false) {
+      const code = typeof json.error === "string" ? json.error : "request_failed";
+      throw new ApiError(code, res.status, code);
+    }
     return json as T;
   }
 

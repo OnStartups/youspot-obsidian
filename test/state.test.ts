@@ -29,7 +29,7 @@ describe("loadPluginData", () => {
 
 describe("planReconcile", () => {
   const rules = { syncFolder: "Brain", exportFolder: "YouSpot" };
-  test("new, stale, and conflicted files are upserts; missing state entries are deletes", () => {
+  test("all eligible originals are scanned and missing entries are reported without deletion", () => {
     const state = emptyState("v");
     state.notes["Brain/fresh.md"] = {
       youspot_id: "n1",
@@ -72,8 +72,13 @@ describe("planReconcile", () => {
       state,
       rules,
     );
-    expect(plan.upserts).toEqual(["Brain/new.md", "Brain/stale.md", "Brain/conf.md"]);
-    expect(plan.deletes).toEqual([{ path: "Brain/gone.md", youspotId: "n3" }]);
+    expect(plan.upserts).toEqual([
+      "Brain/new.md",
+      "Brain/fresh.md",
+      "Brain/stale.md",
+      "Brain/conf.md",
+    ]);
+    expect(plan.missing).toEqual([{ path: "Brain/gone.md", youspotId: "n3" }]);
   });
 });
 
@@ -93,8 +98,10 @@ describe("formatStatus", () => {
     expect(formatStatus({ ...base, configured: false })).toBe("YouSpot: not connected");
     expect(formatStatus({ ...base, error: "boom" })).toBe("YouSpot: error (boom)");
     expect(formatStatus({ ...base, running: true })).toBe("YouSpot: syncing…");
-    expect(formatStatus(base)).toBe("YouSpot: never synced");
-    expect(formatStatus({ ...base, lastPushAt: 8 * 60_000 })).toBe("YouSpot: synced 2m ago");
+    expect(formatStatus(base)).toBe("YouSpot: upload never, download never");
+    expect(formatStatus({ ...base, lastPushAt: 8 * 60_000 })).toBe(
+      "YouSpot: upload 2m ago, download never",
+    );
     expect(formatStatus({ ...base, pending: 3, conflicts: 1, serverEdited: 2 })).toBe(
       "YouSpot: 3 pending, 1 conflict, 2 edited in YouSpot",
     );
