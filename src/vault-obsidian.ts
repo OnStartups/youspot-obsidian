@@ -49,7 +49,8 @@ export class ObsidianVault implements VaultPort {
 
   async writeGuarded(path: string, content: string, previous: string | null): Promise<boolean> {
     if (previous === null) {
-      if (this.exists(path)) return false;
+      if (this.exists(path) || (await this.app.vault.adapter.exists(normalizePath(path))))
+        return false;
       await this.app.vault.create(normalizePath(path), content);
       return true;
     }

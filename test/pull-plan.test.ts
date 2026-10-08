@@ -43,11 +43,12 @@ describe("planPull", () => {
       emptyState("v"),
       DEFAULT_SETTINGS,
       rules,
+      [],
     );
     expect(plan.actions).toEqual([]);
   });
   test("creates a file for a new object", async () => {
-    const plan = await planPull([obj({})], [], emptyState("v"), DEFAULT_SETTINGS, rules);
+    const plan = await planPull([obj({})], [], emptyState("v"), DEFAULT_SETTINGS, rules, []);
     expect(plan.actions).toHaveLength(1);
     expect(plan.actions[0]).toMatchObject({
       kind: "write",
@@ -57,7 +58,7 @@ describe("planPull", () => {
   });
   test("unchanged rendering is still checked against actual local bytes", async () => {
     const state = emptyState("v");
-    const first = await planPull([obj({})], [], state, DEFAULT_SETTINGS, rules);
+    const first = await planPull([obj({})], [], state, DEFAULT_SETTINGS, rules, []);
     const write = first.actions[0];
     if (write?.kind !== "write") throw new Error("expected write");
     state.exports.per_1 = {
@@ -66,7 +67,7 @@ describe("planPull", () => {
       rendered_hash: write.hash,
       updated_at: "",
     };
-    const second = await planPull([obj({})], [], state, DEFAULT_SETTINGS, rules);
+    const second = await planPull([obj({})], [], state, DEFAULT_SETTINGS, rules, []);
     expect(second.actions).toHaveLength(1);
     expect(second.actions[0]).toMatchObject({ hash: write.hash });
   });
@@ -78,7 +79,14 @@ describe("planPull", () => {
       rendered_hash: "old",
       updated_at: "",
     };
-    const plan = await planPull([obj({ name: "Jane Doe" })], [], state, DEFAULT_SETTINGS, rules);
+    const plan = await planPull(
+      [obj({ name: "Jane Doe" })],
+      [],
+      state,
+      DEFAULT_SETTINGS,
+      rules,
+      [],
+    );
     expect(plan.actions[0]).toMatchObject({
       kind: "write",
       path: "Brain/YouSpot/Contacts/Jane.md",
@@ -92,10 +100,37 @@ describe("planPull", () => {
       emptyState("v"),
       DEFAULT_SETTINGS,
       rules,
+      [],
     );
     expect(plan.actions.map((a) => a.path)).toEqual([
       "Brain/YouSpot/Contacts/Jane.md",
       "Brain/YouSpot/Contacts/Jane (per_2).md",
+    ]);
+  });
+  test("names that differ only by case never share a file", async () => {
+    const state = emptyState("v");
+    state.exports.per_old = {
+      path: "Brain/YouSpot/Contacts/Mastercard.md",
+      type: "contact",
+      rendered_hash: "h",
+      updated_at: "",
+    };
+    const plan = await planPull(
+      [
+        obj({ object_id: "per_new", name: "mastercard" }),
+        obj({ object_id: "per_2", name: "Isaac W Ellison" }),
+        obj({ object_id: "per_3", name: "ISAAC W ELLISON" }),
+      ],
+      [],
+      state,
+      DEFAULT_SETTINGS,
+      rules,
+      ["Brain/YouSpot/Contacts/Mastercard.md"],
+    );
+    expect(plan.actions.map((a) => a.path)).toEqual([
+      "Brain/YouSpot/Contacts/mastercard (per_new).md",
+      "Brain/YouSpot/Contacts/Isaac W Ellison.md",
+      "Brain/YouSpot/Contacts/ISAAC W ELLISON (per_3).md",
     ]);
   });
   test("intra-batch connections resolve to wikilinks", async () => {
@@ -118,6 +153,7 @@ describe("planPull", () => {
       emptyState("v"),
       DEFAULT_SETTINGS,
       rules,
+      [],
     );
     const jane = plan.actions.find((a) => a.objectId === "per_1");
     if (jane?.kind !== "write") throw new Error("expected write");
@@ -141,6 +177,7 @@ describe("planPull", () => {
       state,
       DEFAULT_SETTINGS,
       rules,
+      [],
     );
     expect(plan.actions).toHaveLength(1);
     expect(plan.actions[0]?.objectId).toBe("note_2");
@@ -151,7 +188,7 @@ describe("planPull", () => {
       ...DEFAULT_SETTINGS,
       exportTypes: { ...DEFAULT_SETTINGS.exportTypes, contact: false },
     };
-    const plan = await planPull([obj({})], [], emptyState("v"), settings, rules);
+    const plan = await planPull([obj({})], [], emptyState("v"), settings, rules, []);
     expect(plan.actions).toHaveLength(0);
   });
   test("tombstones trash exports and forget vault notes", async () => {
@@ -179,7 +216,7 @@ describe("planPull", () => {
       },
       { object_id: "unknown", type: "note", deleted_at: "", obsidian: null },
     ];
-    const plan = await planPull([], tombs, state, DEFAULT_SETTINGS, rules);
+    const plan = await planPull([], tombs, state, DEFAULT_SETTINGS, rules, []);
     expect(plan.actions).toEqual([
       { kind: "trash", objectId: "per_1", path: "Brain/YouSpot/Contacts/Jane.md" },
     ]);

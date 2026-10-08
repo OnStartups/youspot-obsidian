@@ -7,6 +7,7 @@ import {
   exportRoot,
   isExport,
   isSyncable,
+  pathKey,
   pluralFolder,
   safeFileName,
 } from "../src/sync/paths";
@@ -47,7 +48,7 @@ describe("export paths", () => {
     const taken = new Set<string>();
     const first = exportPath(rules, "contact", "Jane Doe", "per_1", taken);
     expect(first).toBe("Brain/YouSpot/Contacts/Jane Doe.md");
-    taken.add(first);
+    taken.add(pathKey(first));
     expect(exportPath(rules, "contact", "Jane Doe", "per_2", taken)).toBe(
       "Brain/YouSpot/Contacts/Jane Doe (per_2).md",
     );

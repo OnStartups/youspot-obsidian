@@ -386,17 +386,17 @@ export class YouSpotSettingTab extends PluginSettingTab {
             },
           },
           {
-            name: "Rescan and retry originals",
-            desc: "Re-scan original notes. Managed export hashes and pending refresh progress are kept to protect local files.",
+            name: "Resync",
+            desc: "Re-scan original notes, download everything again from YouSpot, and retry what failed. Local edits are kept.",
             render: (setting) => {
               setting.addButton((b) =>
                 b
-                  .setButtonText("Rescan")
+                  .setButtonText("Resync")
                   .onClick(() =>
                     new ConfirmModal(
                       this.app,
-                      "Rescan original notes?",
-                      "Notes in YouSpot are kept. Original notes will be re-scanned; existing managed exports remain protected.",
+                      "Resync with YouSpot?",
+                      "Notes in YouSpot are kept. Original notes are re-scanned and Brain downloads start over; local edits remain protected.",
                       () => void this.plugin.run(() => this.plugin.resetSyncState()),
                     ).open(),
                   ),
@@ -464,8 +464,13 @@ export class YouSpotSettingTab extends PluginSettingTab {
       state.uploadError ? `Upload needs attention: ${state.uploadError}` : "",
       state.downloadError ? `Download needs attention: ${state.downloadError}` : "",
       state.refreshError ? `Full refresh needs attention: ${state.refreshError}` : "",
+      state.exportConflicts?.length
+        ? `${state.exportConflicts.length} downloads skipped because a local file already holds the name. Your local files were kept.`
+        : "",
     ].filter(Boolean))
       setting.descEl.createEl("p", { text });
+    for (const path of state.exportConflicts?.slice(0, 25) ?? [])
+      setting.descEl.createEl("p", { text: path });
     setting.addButton((button) =>
       button
         .setButtonText("Sync now")

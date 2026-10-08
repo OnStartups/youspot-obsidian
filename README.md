@@ -68,7 +68,7 @@ The last refresh report includes local conflicts plus the archive's missing cont
 | Pull server version of this note  | Write the YouSpot copy beside the note                              |
 | Reconcile folder                  | Rescan the folder against local state and the server                |
 | Open in YouSpot                   | Open the active note's object page                                  |
-| Reset sync state                  | Re-scan notes while preserving managed export protection            |
+| Resync                            | Re-scan notes and download everything again, keeping local edits    |
 
 ## Recovery (0.3.1)
 

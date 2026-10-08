@@ -644,7 +644,14 @@ export class SyncEngine {
         page += 1;
       }
       await recoverManaged(this.deps.vault, this.state, this.rules);
-      const plan = await planPull(objects, tombstones, this.state, this.settings, this.rules);
+      const plan = await planPull(
+        objects,
+        tombstones,
+        this.state,
+        this.settings,
+        this.rules,
+        this.deps.vault.listPaths(),
+      );
       this.state.exportConflicts = [];
       await this.applyPull(plan.actions, summary);
       for (const path of plan.forgetNotes) {

@@ -3,7 +3,15 @@ import type { PluginData, RefreshReport } from "../types";
 import type { VaultPort } from "../vault-port";
 import { type BrainArchive, readArchive, relocateDocument, safePath } from "./archive";
 import { hashBytes, sha256Hex } from "./hash";
-import { dirname, exportRoot, isInFolder, isSyncable, joinPath, safeFileName } from "./paths";
+import {
+  dirname,
+  exportRoot,
+  isInFolder,
+  isSyncable,
+  joinPath,
+  pathKey,
+  safeFileName,
+} from "./paths";
 import { applyCapabilities } from "./state";
 import { managedIdentity, recoverManaged } from "./managed";
 
@@ -36,7 +44,7 @@ export async function applyArchive(
   await recoverManaged(vault, state, rules);
   const paths = new Map<string, string | null>();
   const originals = new Map<string, string>();
-  const taken = new Set(vault.listPaths().map((path) => path.toLocaleLowerCase()));
+  const taken = new Set(vault.listPaths().map(pathKey));
   const assigned = new Set<string>();
   const report: RefreshReport = {
     runId,
@@ -70,7 +78,7 @@ export async function applyArchive(
         "A managed document has moved outside the export folder. Restore its location before refreshing.",
       );
     if (existing) {
-      if (assigned.has(path.toLocaleLowerCase()))
+      if (assigned.has(pathKey(path)))
         throw new Error(
           "Two managed documents claim the same path. Resolve the duplicate before refreshing.",
         );
@@ -79,15 +87,12 @@ export async function applyArchive(
       let suffix = 1;
       const pending = state.pendingWrites?.[id];
       if (pending && safePath(pending.path) && isInFolder(pending.path, root)) path = pending.path;
-      while (
-        (taken.has(path.toLocaleLowerCase()) && pending?.path !== path) ||
-        assigned.has(path.toLocaleLowerCase())
-      ) {
+      while ((taken.has(pathKey(path)) && pending?.path !== path) || assigned.has(pathKey(path))) {
         path = `${base}-${suffix++}.md`;
       }
     }
-    taken.add(path.toLocaleLowerCase());
-    assigned.add(path.toLocaleLowerCase());
+    taken.add(pathKey(path));
+    assigned.add(pathKey(path));
     targets.set(id, path);
     paths.set(record.path, path);
   }

@@ -279,7 +279,7 @@ export default class YouSpotPlugin extends Plugin {
     });
     this.addCommand({
       id: "reset-sync-state",
-      name: "Reset sync state",
+      name: "Resync",
       callback: () => void this.run(() => this.resetSyncState()),
     });
   }
@@ -333,8 +333,14 @@ export default class YouSpotPlugin extends Plugin {
     this.engine.resetState();
     await this.persist();
     await this.engine.reconcile();
+    await this.engine.pull();
+    await this.engine.push();
     this.renderStatus();
-    new Notice("YouSpot: originals rescanned. Managed exports and Brain notes were preserved.");
+    new Notice(
+      this.state.lastError
+        ? `YouSpot: resync needs attention. ${this.state.lastError}`
+        : "YouSpot: resync finished. Local edits and Brain notes were preserved.",
+    );
   }
 
   async updateSettings(patch: Partial<PluginData["settings"]>): Promise<void> {

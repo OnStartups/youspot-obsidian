@@ -1,6 +1,6 @@
 import type { ChangeObject, PathRules, SyncState, Tombstone, YouSpotSettings } from "../types";
 import { sha256Hex } from "./hash";
-import { exportPath } from "./paths";
+import { exportPath, pathKey } from "./paths";
 import { renderObject } from "./render";
 
 export type PullAction =
@@ -32,6 +32,7 @@ export async function planPull(
   state: SyncState,
   settings: YouSpotSettings,
   rules: PathRules,
+  vaultPaths: string[],
 ): Promise<PullPlan> {
   const plan: PullPlan = { actions: [], serverEdited: [], forgetNotes: [] };
   const vaultNotes = new Map<string, string>();
@@ -51,16 +52,14 @@ export async function planPull(
   }
 
   const assigned = new Map<string, string>();
-  const taken = new Set<string>();
-  for (const [id, entry] of Object.entries(state.exports)) {
-    if (!included.some((o) => o.object_id === id)) taken.add(entry.path);
-  }
+  const taken = new Set(vaultPaths.map(pathKey));
+  for (const entry of Object.values(state.exports)) taken.add(pathKey(entry.path));
   for (const obj of included) {
     const path =
       state.exports[obj.object_id]?.path ??
       exportPath(rules, obj.type, obj.name, obj.object_id, taken);
     assigned.set(obj.object_id, path);
-    taken.add(path);
+    taken.add(pathKey(path));
   }
 
   const resolvePath = (objectId: string): string | null =>

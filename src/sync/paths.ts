@@ -85,6 +85,10 @@ export function pluralFolder(type: string): string {
   return `${words.join(" ")}s`;
 }
 
+export function pathKey(path: string): string {
+  return path.normalize("NFC").toLowerCase();
+}
+
 export function exportPath(
   rules: PathRules,
   type: string,
@@ -94,7 +98,7 @@ export function exportPath(
 ): string {
   const folder = joinPath(exportRoot(rules), pluralFolder(type));
   const plain = `${folder}/${safeFileName(name)}.md`;
-  if (!taken.has(plain)) return plain;
+  if (!taken.has(pathKey(plain))) return plain;
   return `${folder}/${safeFileName(name)} (${id}).md`;
 }
 
