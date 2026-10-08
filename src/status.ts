@@ -1,5 +1,12 @@
+export type Setup = "none" | "needs-folder" | "ready";
+
+export function setupOf(settings: { token: string; syncFolder: string }): Setup {
+  if (!settings.token) return "none";
+  return settings.syncFolder ? "ready" : "needs-folder";
+}
+
 export interface StatusInput {
-  configured: boolean;
+  setup: Setup;
   pending: number;
   running: boolean;
   lastPushAt: number | null;
@@ -24,7 +31,8 @@ export function relativeTime(then: number, now: number): string {
 }
 
 export function formatStatus(input: StatusInput): string {
-  if (!input.configured) return "YouSpot: not connected";
+  if (input.setup === "none") return "YouSpot: not connected";
+  if (input.setup === "needs-folder") return "YouSpot: choose a sync folder";
   if (input.uploadError || input.failed)
     return `YouSpot: uploads need attention (${input.failed ?? 0} failed), download ${input.lastPullAt ? relativeTime(input.lastPullAt, input.now) : "never"}`;
   if (input.downloadError) return "YouSpot: downloads need attention";

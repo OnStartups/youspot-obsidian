@@ -22,8 +22,15 @@
   font-size: var(--font-ui-small);
 }
 
+/* The token box shares its row with two buttons, so it wraps onto its own line. */
+.youspot-token-row .setting-item-control {
+  flex: 1 1 24em;
+  flex-wrap: wrap;
+}
+
 .youspot-wide-input {
-  width: 100%;
+  flex: 1 1 100%;
+  min-width: 14em;
 }
 
 .youspot-settings-steps {

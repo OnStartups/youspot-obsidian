@@ -49,10 +49,6 @@ export class ApiError extends Error {
     return this.status === 401;
   }
 
-  get disabled(): boolean {
-    return this.status === 403 && this.code === "not_enabled";
-  }
-
   get retryable(): boolean {
     return this.status === 0 || this.status === 429 || this.status >= 500;
   }

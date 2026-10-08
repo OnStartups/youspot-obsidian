@@ -84,7 +84,7 @@ describe("planReconcile", () => {
 
 describe("formatStatus", () => {
   const base = {
-    configured: true,
+    setup: "ready" as const,
     pending: 0,
     running: false,
     lastPushAt: null,
@@ -95,7 +95,8 @@ describe("formatStatus", () => {
     now: 10 * 60_000,
   };
   test("states", () => {
-    expect(formatStatus({ ...base, configured: false })).toBe("YouSpot: not connected");
+    expect(formatStatus({ ...base, setup: "none" })).toBe("YouSpot: not connected");
+    expect(formatStatus({ ...base, setup: "needs-folder" })).toBe("YouSpot: choose a sync folder");
     expect(formatStatus({ ...base, error: "boom" })).toBe("YouSpot: error (boom)");
     expect(formatStatus({ ...base, running: true })).toBe("YouSpot: syncing…");
     expect(formatStatus(base)).toBe("YouSpot: upload never, download never");

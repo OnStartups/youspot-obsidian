@@ -274,24 +274,7 @@ describe("SyncEngine push", () => {
     expect(http.requests).toHaveLength(1);
   });
 
-  test("403 not_enabled halts without blaming the token", async () => {
-    const { vault, http, engine, data, notices } = setup();
-    http.on("POST", "/api/obsidian/notes/push", () => ({
-      status: 403,
-      json: { error: "not_enabled" },
-    }));
-    vault.add("Brain/a.md", "x");
-    engine.handleChanged("Brain/a.md");
-    await engine.push();
-    expect(data.state.lastError).toBe("not_enabled");
-    expect(engine.queue.size).toBe(1);
-    expect(notices[0]).toContain("not enabled");
-    expect(notices[0]).not.toContain("token");
-    await engine.push();
-    expect(http.requests).toHaveLength(1);
-  });
-
-  test("a plain 403 is not treated as the feature being off", async () => {
+  test("a 403 reports a sync failure", async () => {
     const { vault, http, engine, notices } = setup();
     http.on("POST", "/api/obsidian/notes/push", () => ({
       status: 403,

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { formatStatus, type StatusInput } from "../src/status";
 
 const status: StatusInput = {
-  configured: true,
+  setup: "ready",
   pending: 0,
   running: false,
   lastPushAt: 60_000,
@@ -25,5 +25,5 @@ test("download failure and pending work have distinct visible states", () => {
     "downloads need attention",
   );
   expect(formatStatus({ ...status, pending: 12 })).toContain("12 pending");
-  expect(formatStatus({ ...status, configured: false })).toBe("YouSpot: not connected");
+  expect(formatStatus({ ...status, setup: "none" })).toBe("YouSpot: not connected");
 });

@@ -8,7 +8,7 @@ import {
   type SettingDefinitionItem,
 } from "obsidian";
 import { diagnosticSummary } from "./diagnostics";
-import { relativeTime } from "./status";
+import { relativeTime, setupOf } from "./status";
 import { FolderSuggest } from "./folder-suggest";
 import type YouSpotPlugin from "./main";
 import { DEFAULT_SETTINGS, applyCapabilities } from "./sync/state";
@@ -425,7 +425,9 @@ export class YouSpotSettingTab extends PluginSettingTab {
       cls: "youspot-settings-account",
       text: this.plugin.accountEmail
         ? `Connected as ${this.plugin.accountEmail}`
-        : "Not connected on this installation.",
+        : setupOf(this.prefs) === "needs-folder"
+          ? "Token saved. Choose a sync folder below to finish connecting."
+          : "Not connected on this installation.",
     });
     let draft = this.prefs.token;
     setting.addText((text) => {

@@ -1,4 +1,5 @@
 import { ApiError, type ApiClient } from "../api";
+import { type Setup, setupOf } from "../status";
 import type { DeleteRef, PathRules, PluginData, PushNote } from "../types";
 import type { VaultPort } from "../vault-port";
 import { emitFrontmatter, splitFrontmatter } from "./frontmatter";
@@ -149,8 +150,12 @@ export class SyncEngine {
     return { syncFolder: this.settings.syncFolder, exportFolder: this.settings.exportFolder };
   }
 
+  get setup(): Setup {
+    return setupOf(this.settings);
+  }
+
   get configured(): boolean {
-    return Boolean(this.settings.token && this.settings.syncFolder);
+    return this.setup === "ready";
   }
 
   get running(): boolean {
@@ -369,7 +374,7 @@ export class SyncEngine {
         await this.pushBatch(entries, summary);
         this.backoffMs = MIN_BACKOFF;
       } catch (err) {
-        if (err instanceof ApiError && !err.retryable && !err.unauthorized && !err.disabled) {
+        if (err instanceof ApiError && !err.retryable && !err.unauthorized) {
           for (const entry of entries) {
             const hash = this.deps.vault.stat(entry.path)
               ? await localHash(
@@ -857,14 +862,10 @@ export class SyncEngine {
     this.state[`${direction}Error`] = message;
     this.state.lastError =
       this.state.uploadError ?? this.state.downloadError ?? this.state.refreshError ?? null;
-    if (err instanceof ApiError && (err.unauthorized || err.disabled)) {
+    if (err instanceof ApiError && err.unauthorized) {
       this.halted = true;
       this.stop();
-      this.deps.notify(
-        err.unauthorized
-          ? "YouSpot: token rejected. Check the token in settings."
-          : "YouSpot: sync is not enabled on this account yet.",
-      );
+      this.deps.notify("YouSpot: token rejected. Check the token in settings.");
       return;
     }
     if (err instanceof ApiError && err.retryable) {

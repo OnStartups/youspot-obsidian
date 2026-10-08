@@ -382,7 +382,7 @@ export default class YouSpotPlugin extends Plugin {
     if (!this.statusEl) return;
     this.settingsTab?.updateStatus();
     const text = formatStatus({
-      configured: this.engine.configured,
+      setup: this.engine.setup,
       pending: this.engine.queue.size,
       running: this.engine.running,
       lastPushAt: this.state.lastPushAt,
