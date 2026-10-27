@@ -33,6 +33,30 @@
   min-width: 14em;
 }
 
+.youspot-folder-setting .setting-item-control,
+.youspot-folder-list {
+  align-items: stretch;
+  display: flex;
+  flex: 1 1 24em;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.youspot-folder-row {
+  align-items: center;
+  display: flex;
+  gap: var(--size-4-2);
+}
+
+.youspot-folder-row input {
+  flex: 1 1 auto;
+  min-width: 14em;
+}
+
+.youspot-folder-setting .setting-item-control > button {
+  align-self: flex-end;
+}
+
 .youspot-settings-steps {
   margin: 0.4em 0 0;
   padding-left: 1.1em;

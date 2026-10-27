@@ -28,9 +28,20 @@ describe("isSyncable", () => {
     expect(isSyncable("Brainstorm/a.md", rules)).toBe(false);
     expect(isSyncable("Brain/YouSpotty/a.md", rules)).toBe(true);
   });
-  test("empty sync folder means the whole vault", () => {
-    expect(isSyncable("anywhere/a.md", { syncFolder: "", exportFolder: "YouSpot" })).toBe(true);
-    expect(isSyncable("YouSpot/a.md", { syncFolder: "", exportFolder: "YouSpot" })).toBe(false);
+  test("accepts multiple disjoint folders without widening vault access", () => {
+    const multiple = {
+      syncFolder: "Work",
+      additionalSyncFolders: ["Personal/Research"],
+      exportFolder: "YouSpot",
+    };
+    expect(isSyncable("Work/a.md", multiple)).toBe(true);
+    expect(isSyncable("Personal/Research/b.md", multiple)).toBe(true);
+    expect(isSyncable("Personal/Journal/c.md", multiple)).toBe(false);
+    expect(isSyncable("Work/YouSpot/Contacts/Jane.md", multiple)).toBe(false);
+    expect(isSyncable("Personal/Research/YouSpot/a.md", multiple)).toBe(true);
+  });
+  test("empty sync folders do not expose the whole vault", () => {
+    expect(isSyncable("anywhere/a.md", { syncFolder: "", exportFolder: "YouSpot" })).toBe(false);
   });
   test("conflict copies never sync", () => {
     expect(isSyncable("Brain/a.youspot-conflict.md", rules)).toBe(false);
@@ -41,6 +52,13 @@ describe("isSyncable", () => {
 describe("export paths", () => {
   test("root joins sync and export folders", () => {
     expect(exportRoot(rules)).toBe("Brain/YouSpot");
+    expect(
+      exportRoot({
+        syncFolder: "Brain",
+        additionalSyncFolders: ["Research"],
+        exportFolder: "YouSpot",
+      }),
+    ).toBe("Brain/YouSpot");
     expect(exportRoot({ syncFolder: "", exportFolder: "/YouSpot/" })).toBe("YouSpot");
     expect(isExport("Brain/YouSpot/x.md", rules)).toBe(true);
   });

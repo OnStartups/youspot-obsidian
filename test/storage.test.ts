@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { IDBFactory } from "fake-indexeddb";
-import { IndexedLocalStore, PluginStorage, localClientId, type SharedData } from "../src/storage";
+import {
+  IndexedLocalStore,
+  PluginStorage,
+  localClientId,
+  stateScope,
+  type SharedData,
+} from "../src/storage";
 import { DEFAULT_SETTINGS, emptyState } from "../src/sync/state";
 import { diagnosticSummary } from "../src/diagnostics";
 
@@ -90,6 +96,41 @@ describe("local plugin persistence", () => {
     await env.storage.preferences({ syncOnSave: false });
     expect((env.disk() as SharedData).settings.syncIntervalMinutes).toBe(7);
     expect((env.disk() as SharedData).settings.syncOnSave).toBe(false);
+    env.local.close();
+  });
+
+  test("additional sync folders persist in shared settings and isolate local state", async () => {
+    const env = fixture();
+    const data = await env.storage.load();
+    await env.storage.preferences({ additionalSyncFolders: ["Research", "Clients/Active"] });
+    expect((env.disk() as SharedData).settings.additionalSyncFolders).toEqual([
+      "Research",
+      "Clients/Active",
+    ]);
+    const original = stateScope(data.settings, "test@example.invalid", data.state.vaultId);
+    data.settings.additionalSyncFolders = ["Research"];
+    expect(stateScope(data.settings, "test@example.invalid", data.state.vaultId)).not.toBe(
+      original,
+    );
+    env.local.close();
+  });
+
+  test("a single-folder vault finds the progress 0.3.3 saved", async () => {
+    const env = fixture({ version: 3, vaultId: "stable-vault", settings: { syncFolder: "Brain" } });
+    const data = await env.storage.load();
+    const saved = { ...emptyState("stable-vault"), lastPullAt: 500 };
+    await env.local.put(
+      JSON.stringify([
+        data.settings.apiBase,
+        "test@example.invalid",
+        "stable-vault",
+        "Brain",
+        data.settings.exportFolder,
+      ]),
+      saved,
+    );
+    await env.storage.bind(data, "test@example.invalid");
+    expect(data.state.lastPullAt).toBe(500);
     env.local.close();
   });
 
@@ -255,6 +296,7 @@ describe("local plugin persistence", () => {
     expect(text).not.toContain("mcp_private");
     expect(text).not.toContain("private@example.invalid");
     expect(JSON.parse(text).errors.upload).toBe("sync_failed");
+    expect(JSON.parse(text).folders.originals).toEqual(["Brain"]);
   });
 
   test("installation identity cannot silently change when local persistence fails", () => {

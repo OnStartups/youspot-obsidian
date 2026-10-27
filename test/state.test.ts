@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatStatus } from "../src/status";
+import { formatStatus, setupOf } from "../src/status";
 import { planReconcile } from "../src/sync/scan";
 import { DEFAULT_SETTINGS, emptyState, loadPluginData, newVaultId } from "../src/sync/state";
 
@@ -24,6 +24,21 @@ describe("loadPluginData", () => {
   });
   test("newVaultId is 12 lowercase alphanumerics", () => {
     expect(newVaultId()).toMatch(/^[a-z0-9]{12}$/);
+  });
+  test("older settings gain an empty additional folder list", () => {
+    const data = loadPluginData({ settings: { syncFolder: "Brain" } });
+    expect(data.settings.additionalSyncFolders).toEqual([]);
+  });
+  test("any selected folder completes setup", () => {
+    expect(setupOf({ token: "mcp_x", syncFolder: "", additionalSyncFolders: ["Research"] })).toBe(
+      "ready",
+    );
+    expect(setupOf({ token: "mcp_x", syncFolder: "", additionalSyncFolders: [] })).toBe(
+      "needs-folder",
+    );
+    expect(setupOf({ token: "mcp_x", syncFolder: "/", additionalSyncFolders: [] })).toBe(
+      "needs-folder",
+    );
   });
 });
 
@@ -96,7 +111,9 @@ describe("formatStatus", () => {
   };
   test("states", () => {
     expect(formatStatus({ ...base, setup: "none" })).toBe("YouSpot: not connected");
-    expect(formatStatus({ ...base, setup: "needs-folder" })).toBe("YouSpot: choose a sync folder");
+    expect(formatStatus({ ...base, setup: "needs-folder" })).toBe(
+      "YouSpot: choose one or more sync folders",
+    );
     expect(formatStatus({ ...base, error: "boom" })).toBe("YouSpot: error (boom)");
     expect(formatStatus({ ...base, running: true })).toBe("YouSpot: syncing…");
     expect(formatStatus(base)).toBe("YouSpot: upload never, download never");

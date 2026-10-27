@@ -145,6 +145,7 @@ export interface YouSpotSettings {
   apiBase: string;
   appBase: string;
   syncFolder: string;
+  additionalSyncFolders: string[];
   exportFolder: string;
   syncIntervalMinutes: number;
   syncOnSave: boolean;
@@ -236,6 +237,7 @@ export interface MissingNote {
 
 export interface PathRules {
   syncFolder: string;
+  additionalSyncFolders?: string[];
   exportFolder: string;
 }
 

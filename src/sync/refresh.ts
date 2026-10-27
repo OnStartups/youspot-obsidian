@@ -11,6 +11,7 @@ import {
   joinPath,
   pathKey,
   safeFileName,
+  syncFolders,
 } from "./paths";
 import { applyCapabilities } from "./state";
 import { managedIdentity, recoverManaged } from "./managed";
@@ -39,7 +40,7 @@ export async function applyArchive(
   const state = data.state;
   const rules = data.settings;
   const root = exportRoot(rules);
-  if (!safePath(root) || !rules.syncFolder || !rules.exportFolder)
+  if (!safePath(root) || !syncFolders(rules).length || !rules.exportFolder)
     throw new Error("Choose safe sync and export folders before refreshing.");
   await recoverManaged(vault, state, rules);
   const paths = new Map<string, string | null>();
@@ -215,7 +216,7 @@ export async function refreshBrain(deps: RefreshDeps): Promise<RefreshReport | n
       .map(([type]) => type);
     if (!types.length) throw new Error("Select at least one content type in settings.");
     const root = exportRoot(settings);
-    if (!settings.syncFolder || !settings.exportFolder || !safePath(root))
+    if (!syncFolders(settings).length || !settings.exportFolder || !safePath(root))
       throw new Error("Choose safe sync and export folders before refreshing.");
     data.state.refresh = {
       request: {

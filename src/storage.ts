@@ -1,4 +1,5 @@
 import { canonicalJSON } from "./sync/frontmatter";
+import { syncFolders } from "./sync/paths";
 import { DEFAULT_SETTINGS, emptyState, loadPluginData, newVaultId } from "./sync/state";
 import type { PluginData, SyncState, YouSpotSettings } from "./types";
 
@@ -83,6 +84,7 @@ interface Connection {
 
 const SHARED_KEYS = [
   "syncFolder",
+  "additionalSyncFolders",
   "exportFolder",
   "syncIntervalMinutes",
   "syncOnSave",
@@ -105,6 +107,14 @@ export function sharedSettings(settings: YouSpotSettings): SharedSettings {
 
 export function readShared(raw: unknown, vaultId: string): SharedData {
   const input = record(raw);
+  const rawSettings = record(input.settings);
+  if (
+    "additionalSyncFolders" in rawSettings &&
+    (!Array.isArray(rawSettings.additionalSyncFolders) ||
+      rawSettings.additionalSyncFolders.some((folder) => typeof folder !== "string"))
+  ) {
+    throw new Error("Invalid synced folders.");
+  }
   const loaded = loadPluginData(raw, () => vaultId);
   const settings = sharedSettings(loaded.settings);
   for (const key of ["syncFolder", "exportFolder", "exportSpaceId"] as const) {
@@ -135,7 +145,7 @@ export function stateScope(settings: YouSpotSettings, account: string, vaultId: 
     settings.apiBase.replace(/\/+$/, ""),
     account,
     vaultId,
-    settings.syncFolder,
+    settings.additionalSyncFolders.length ? syncFolders(settings) : settings.syncFolder,
     settings.exportFolder,
   ]);
 }
@@ -229,6 +239,7 @@ export class PluginStorage {
       (!legacy.account || legacy.account === account) &&
       legacy.apiBase === data.settings.apiBase &&
       legacy.syncFolder === data.settings.syncFolder &&
+      data.settings.additionalSyncFolders.length === 0 &&
       legacy.exportFolder === data.settings.exportFolder
         ? legacy.state
         : emptyState(data.state.vaultId));

@@ -319,7 +319,7 @@ export default class YouSpotPlugin extends Plugin {
 
   async syncNow(): Promise<void> {
     if (!this.engine.configured) {
-      new Notice("YouSpot: add a token and choose a sync folder in settings first.");
+      new Notice("YouSpot: add a token and choose one or more sync folders in settings first.");
       return;
     }
     if (!this.accountEmail) await this.transition(() => this.connect());

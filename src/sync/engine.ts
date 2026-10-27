@@ -147,7 +147,11 @@ export class SyncEngine {
   }
 
   get rules(): PathRules {
-    return { syncFolder: this.settings.syncFolder, exportFolder: this.settings.exportFolder };
+    return {
+      syncFolder: this.settings.syncFolder,
+      additionalSyncFolders: this.settings.additionalSyncFolders,
+      exportFolder: this.settings.exportFolder,
+    };
   }
 
   get setup(): Setup {

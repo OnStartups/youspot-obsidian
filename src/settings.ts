@@ -1,11 +1,13 @@
 import {
   type App,
   apiVersion,
+  ButtonComponent,
   Modal,
   Notice,
   PluginSettingTab,
   Setting,
   type SettingDefinitionItem,
+  TextComponent,
 } from "obsidian";
 import { diagnosticSummary } from "./diagnostics";
 import { relativeTime, setupOf } from "./status";
@@ -146,14 +148,14 @@ export class YouSpotSettingTab extends PluginSettingTab {
         heading: "Folders",
         items: [
           {
-            name: "Sync folder",
-            desc: "Only notes inside this folder go to YouSpot. Sync is off until one is chosen.",
+            name: "Sync folders",
+            desc: "Only notes inside these folders go to YouSpot. The first folder also contains Brain exports.",
             aliases: ["vault folder", "which notes"],
-            render: (setting) => this.renderSyncFolder(setting),
+            render: (setting) => this.renderSyncFolders(setting),
           },
           {
             name: "Export folder",
-            desc: "Inside the sync folder. Brain objects are written here and never pushed back.",
+            desc: "Inside the first sync folder. Brain objects are written here and never pushed back.",
             control: {
               type: "text",
               key: "exportFolder",
@@ -543,18 +545,54 @@ export class YouSpotSettingTab extends PluginSettingTab {
     }
   }
 
-  private renderSyncFolder(setting: Setting): void {
-    setting.addText((t) => {
-      t.setPlaceholder("Knowledge").setValue(this.prefs.syncFolder);
-      new FolderSuggest(this.app, t.inputEl, (folder) => {
-        void this.plugin.run(() => this.plugin.updateSettings({ syncFolder: folder }));
+  private renderSyncFolders(setting: Setting): void {
+    setting.settingEl.addClass("youspot-folder-setting");
+    const rows = setting.controlEl.createDiv({ cls: "youspot-folder-list" });
+    const folders = [this.prefs.syncFolder, ...this.prefs.additionalSyncFolders];
+    const commit = async (index: number, value: string): Promise<void> => {
+      const next = [...folders];
+      next[index] = value.trim().replace(/^\/+|\/+$/g, "");
+      const unique = [...new Set(next.filter(Boolean))];
+      await this.plugin.run(() =>
+        this.plugin.updateSettings({
+          syncFolder: unique[0] ?? "",
+          additionalSyncFolders: unique.slice(1),
+        }),
+      );
+    };
+    const renderRow = (folder: string, index: number): void => {
+      const row = rows.createDiv({ cls: "youspot-folder-row" });
+      const input = new TextComponent(row)
+        .setPlaceholder(index === 0 ? "Knowledge" : "Another folder")
+        .setValue(folder);
+      input.inputEl.setAttribute(
+        "aria-label",
+        index === 0 ? "Primary sync folder" : `Additional sync folder ${index}`,
+      );
+      let saved = folder;
+      const save = (value: string) => {
+        const normalized = value.trim().replace(/^\/+|\/+$/g, "");
+        if (normalized === saved) return;
+        saved = normalized;
+        void commit(index, normalized);
+      };
+      new FolderSuggest(this.app, input.inputEl, save);
+      input.inputEl.addEventListener("change", () => save(input.getValue()));
+      if (index > 0 || !folder) {
+        new ButtonComponent(row)
+          .setIcon("trash-2")
+          .setTooltip("Remove folder")
+          .onClick(() => void commit(index, ""));
+      }
+    };
+    folders.forEach(renderRow);
+    const addButton = new ButtonComponent(setting.controlEl)
+      .setButtonText("Add folder")
+      .setIcon("plus")
+      .onClick(() => {
+        renderRow("", folders.length);
+        addButton.setDisabled(true);
       });
-      t.onChange(async (value) => {
-        await this.plugin.run(() =>
-          this.plugin.updateSettings({ syncFolder: value.trim().replace(/^\/+|\/+$/g, "") }),
-        );
-      });
-    });
   }
 
   private renderHelp(setting: Setting): void {
@@ -564,7 +602,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
       text: "Paste your token, then connect this installation.",
     });
     list.createEl("li", {
-      text: "Choose a sync folder. Nothing moves until you do, so the rest of the vault stays put.",
+      text: "Choose one or more sync folders. Nothing moves until you do, so the rest of the vault stays put.",
     });
     list.createEl("li", { text: "Run “YouSpot: sync now” from the command palette." });
     setting.descEl

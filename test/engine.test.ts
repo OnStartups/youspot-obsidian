@@ -138,6 +138,20 @@ describe("SyncEngine push", () => {
     expect(seen).toHaveLength(1);
   });
 
+  test("pushes notes from each selected sync folder and ignores the rest of the vault", async () => {
+    const { vault, http, engine } = setup({ additionalSyncFolders: ["Research"] });
+    const seen: PushRequest[] = [];
+    okPush(http, seen);
+    vault.add("Brain/a.md", "primary");
+    vault.add("Research/b.md", "additional");
+    vault.add("Private/c.md", "excluded");
+
+    await engine.reconcile();
+    await engine.push();
+
+    expect(seen[0]?.notes.map((note) => note.path).sort()).toEqual(["Brain/a.md", "Research/b.md"]);
+  });
+
   test("a body edit re-pushes with the stamped id and the id survives a rename", async () => {
     const { vault, http, engine, data } = setup();
     const seen: PushRequest[] = [];

@@ -7,6 +7,7 @@ export const DEFAULT_SETTINGS: YouSpotSettings = {
   apiBase: "https://be.youspot.com",
   appBase: "https://youspot.com",
   syncFolder: "",
+  additionalSyncFolders: [],
   exportFolder: "YouSpot",
   syncIntervalMinutes: 5,
   syncOnSave: true,
@@ -67,6 +68,11 @@ export function loadPluginData(raw: unknown, vaultId: () => string = newVaultId)
       ...(isRecord(settings.exportTypes) ? settings.exportTypes : {}),
     },
   } as YouSpotSettings;
+  merged.additionalSyncFolders = Array.isArray(settings.additionalSyncFolders)
+    ? settings.additionalSyncFolders.filter(
+        (folder): folder is string => typeof folder === "string",
+      )
+    : [];
   const base = emptyState(
     typeof state.vaultId === "string" && state.vaultId ? state.vaultId : vaultId(),
   );

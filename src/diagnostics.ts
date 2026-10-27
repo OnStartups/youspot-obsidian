@@ -1,4 +1,5 @@
 import type { PluginData } from "./types";
+import { syncFolders } from "./sync/paths";
 
 function code(error: string | null | undefined): string | null {
   return error ? (/^[a-z][a-z0-9_]{0,79}$/.test(error) ? error : "sync_failed") : null;
@@ -15,7 +16,7 @@ export function diagnosticSummary(
       appVersion,
       pluginVersion,
       stateVersion: data.version,
-      folders: { originals: settings.syncFolder, exports: settings.exportFolder },
+      folders: { originals: syncFolders(settings), exports: settings.exportFolder },
       selectedTypes: Object.entries(settings.exportTypes)
         .filter(([, selected]) => selected)
         .map(([type]) => type),

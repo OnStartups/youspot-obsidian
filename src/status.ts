@@ -1,8 +1,14 @@
+import { syncFolders } from "./sync/paths";
+
 export type Setup = "none" | "needs-folder" | "ready";
 
-export function setupOf(settings: { token: string; syncFolder: string }): Setup {
+export function setupOf(settings: {
+  token: string;
+  syncFolder: string;
+  additionalSyncFolders?: string[];
+}): Setup {
   if (!settings.token) return "none";
-  return settings.syncFolder ? "ready" : "needs-folder";
+  return syncFolders(settings).length ? "ready" : "needs-folder";
 }
 
 export interface StatusInput {
@@ -32,7 +38,7 @@ export function relativeTime(then: number, now: number): string {
 
 export function formatStatus(input: StatusInput): string {
   if (input.setup === "none") return "YouSpot: not connected";
-  if (input.setup === "needs-folder") return "YouSpot: choose a sync folder";
+  if (input.setup === "needs-folder") return "YouSpot: choose one or more sync folders";
   if (input.uploadError || input.failed)
     return `YouSpot: uploads need attention (${input.failed ?? 0} failed), download ${input.lastPullAt ? relativeTime(input.lastPullAt, input.now) : "never"}`;
   if (input.downloadError) return "YouSpot: downloads need attention";

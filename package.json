@@ -1,6 +1,6 @@
 {
   "name": "@youspot/obsidian",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "private": false,
   "type": "module",
   "scripts": {
@@ -15,17 +15,20 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/bun": "^1.4.0",
+    "@types/bun": "^1.4.3",
     "esbuild": "^0.28.2",
-    "eslint": "^10.9.1",
+    "eslint": "^10.12.0",
     "eslint-plugin-obsidianmd": "^0.4.2",
     "fake-indexeddb": "^6.2.5",
-    "obsidian": "^1.13.1",
+    "obsidian": "^1.14.4",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.69.0"
+    "typescript-eslint": "^8.71.2"
   },
   "dependencies": {
-    "fflate": "0.8.2"
+    "fflate": "0.8.3"
+  },
+  "overrides": {
+    "moment": "2.31.0"
   },
   "description": "Two-way sync between an Obsidian vault folder and your YouSpot Brain.",
   "repository": {

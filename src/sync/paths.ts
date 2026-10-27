@@ -36,13 +36,22 @@ export function dirname(path: string): string {
   return i === -1 ? "" : path.slice(0, i);
 }
 
+export function syncFolders(
+  rules: Pick<PathRules, "syncFolder" | "additionalSyncFolders">,
+): string[] {
+  const folders = [rules.syncFolder, ...(rules.additionalSyncFolders ?? [])]
+    .map(normalizeFolder)
+    .filter(Boolean);
+  return [...new Set(folders)];
+}
+
 export function basename(path: string): string {
   const file = path.slice(path.lastIndexOf("/") + 1);
   return file.endsWith(".md") ? file.slice(0, -3) : file;
 }
 
 export function exportRoot(rules: PathRules): string {
-  return joinPath(rules.syncFolder, rules.exportFolder);
+  return joinPath(syncFolders(rules)[0] ?? "", rules.exportFolder);
 }
 
 export function isInFolder(path: string, folder: string): boolean {
@@ -63,7 +72,7 @@ export function conflictPath(path: string): string {
 
 export function isSyncable(path: string, rules: PathRules): boolean {
   if (!path.endsWith(".md") || path.endsWith(CONFLICT_SUFFIX)) return false;
-  if (!isInFolder(path, rules.syncFolder)) return false;
+  if (!syncFolders(rules).some((folder) => isInFolder(path, folder))) return false;
   return !isExport(path, rules);
 }
 
