@@ -29,6 +29,7 @@ export function diagnosticSummary(
       failed: Object.keys(state.failures ?? {}).length,
       missing: Object.keys(state.missing ?? {}).length,
       exportConflicts: state.exportConflicts?.length ?? 0,
+      managedDuplicates: state.managedDuplicates?.length ?? 0,
       refreshConflicts: state.refreshReport?.conflicts.length ?? 0,
       errors: {
         upload: code(state.uploadError),

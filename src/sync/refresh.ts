@@ -42,7 +42,8 @@ export async function applyArchive(
   const root = exportRoot(rules);
   if (!safePath(root) || !syncFolders(rules).length || !rules.exportFolder)
     throw new Error("Choose safe sync and export folders before refreshing.");
-  await recoverManaged(vault, state, rules);
+  const duplicates = await recoverManaged(vault, state, rules);
+  const held = new Map(duplicates.map((d) => [d.objectId, d.holders]));
   const paths = new Map<string, string | null>();
   const originals = new Map<string, string>();
   const taken = new Set(vault.listPaths().map(pathKey));
@@ -66,6 +67,19 @@ export async function applyArchive(
   const targets = new Map<string, string>();
   for (const record of archive.records) {
     const id = archive.identities.get(record.id)!;
+    const copies = held.get(id);
+    if (copies) {
+      const tracked = state.exports[id]?.path ?? "";
+      paths.set(
+        record.path,
+        copies.includes(tracked)
+          ? tracked
+          : copies
+              .map((path) => ({ path, mtime: vault.stat(path)?.mtime ?? 0 }))
+              .sort((a, b) => b.mtime - a.mtime)[0]!.path,
+      );
+      continue;
+    }
     const original = originals.get(id);
     if (original) {
       paths.set(record.path, original);

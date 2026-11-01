@@ -281,15 +281,34 @@ describe("shared archive delivery", () => {
     expect(report.current).toBe(fixture.records.length - 1);
   });
 
-  test("duplicate managed identities stop delivery before overwriting either copy", async () => {
+  test("duplicate managed identities skip that record, name both files and deliver the rest", async () => {
     const { archive } = await packaged();
     const deps = setup();
     await applyArchive(deps, archive, "first");
     const original = await deps.vault.read(exported(first.path));
     deps.vault.add("Brain/YouSpot/duplicate.md", original);
-    await expect(applyArchive(deps, archive, "second")).rejects.toThrow("same object");
+    const report = await applyArchive(deps, archive, "second");
     expect(await deps.vault.read(exported(first.path))).toBe(original);
     expect(await deps.vault.read("Brain/YouSpot/duplicate.md")).toBe(original);
+    expect(report.current).toBe(fixture.records.length - 1);
+    expect(report.conflicts).toEqual([]);
+    expect(deps.data.state.managedDuplicates).toEqual([
+      {
+        objectId: "fixture_1",
+        paths: [exported(first.path), "Brain/YouSpot/duplicate.md"],
+        holders: [exported(first.path), "Brain/YouSpot/duplicate.md"],
+      },
+    ]);
+  });
+
+  test("a full refresh keeps the held watermark because an archive carries no deletions", async () => {
+    const { archive } = await packaged();
+    const deps = setup();
+    deps.data.state.heldSince = "2026-09-02T00:00:00Z";
+    deps.data.state.replayHeld = true;
+    await applyArchive(deps, archive, "run1");
+    expect(deps.data.state.heldSince).toBe("2026-09-02T00:00:00Z");
+    expect(deps.data.state.replayHeld).toBe(true);
   });
 
   test("rejects documents outside the selected types even with valid checksums", async () => {

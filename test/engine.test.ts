@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ApiClient, type HttpPort, type HttpRequest } from "../src/api";
-import { SyncEngine } from "../src/sync/engine";
+import { HELD_CHANGES_NEED_REFRESH, SyncEngine } from "../src/sync/engine";
 import { DEFAULT_SETTINGS, emptyState } from "../src/sync/state";
 import type { ChangeObject, PluginData, PushRequest } from "../src/types";
 import { MemoryVault } from "./memory-vault";
@@ -758,5 +758,304 @@ describe("upload recovery and deletion safety", () => {
     expect(result.outcome).toBe("failed");
     expect(data.state.uploadError).toBe("not_authenticated");
     expect(data.state.lastUploadCheckAt).toBeNull();
+  });
+});
+
+describe("duplicate managed exports", () => {
+  const janePath = "Brain/YouSpot/Contacts/Jane.md";
+  const copy = "Brain/YouSpot/Contacts/Jane copy.md";
+  const bob: ChangeObject = { ...jane, object_id: "per_2", name: "Bob", json_data: {} };
+
+  async function duplicated() {
+    const ctx = setup();
+    let served: ChangeObject[] = [jane];
+    ctx.http.on("GET", "/api/obsidian/changes", (req) => {
+      const since = new URL(req.url).searchParams.get("since");
+      return changes(served, {
+        next_since: since ? "2026-09-03T00:00:00Z" : "2026-09-02T00:00:00Z",
+      });
+    });
+    await ctx.engine.pull();
+    const original = await ctx.vault.read(janePath);
+    ctx.vault.add(copy, original);
+    served = [{ ...jane, name: "Jane Doe" }, bob];
+    await ctx.engine.pull();
+    const lastSince = () => new URL(ctx.http.requests.at(-1)?.url ?? "").searchParams.get("since");
+    return { ...ctx, original, lastSince };
+  }
+
+  test("a duplicated record is listed with both files while other downloads continue", async () => {
+    const { vault, data, engine, original } = await duplicated();
+    expect(await vault.read(janePath)).toBe(original);
+    expect(await vault.read(copy)).toBe(original);
+    expect(vault.files.get("Brain/YouSpot/Contacts/Bob.md")?.content).toContain("Bob");
+    expect(data.state.managedDuplicates).toEqual([
+      { objectId: "per_1", paths: [copy, janePath], holders: [copy, janePath] },
+    ]);
+    expect(data.state.watermark).toBe("2026-09-03T00:00:00Z");
+    expect(data.state.heldSince).toBe("2026-09-02T00:00:00Z");
+    expect(data.state.downloadError).toBeNull();
+    expect(data.state.lastError).toBeNull();
+    expect(engine.conflicts).toBe(1);
+  });
+
+  test("removing the extra copy downloads the changes that were held back", async () => {
+    const { vault, data, engine, lastSince } = await duplicated();
+    await vault.trash(copy);
+    await engine.pull();
+    expect(lastSince()).toBe("2026-09-02T00:00:00Z");
+    expect(await vault.read(janePath)).toContain("Jane Doe");
+    expect(data.state.managedDuplicates).toEqual([]);
+    expect(data.state.heldSince).toBeUndefined();
+    expect(data.state.watermark).toBe("2026-09-03T00:00:00Z");
+  });
+
+  test("trashing duplicates keeps the tracked copy and queues no upload", async () => {
+    const { vault, data, engine } = await duplicated();
+    await engine.trashDuplicates();
+    expect(vault.trashed).toEqual([copy]);
+    expect(await vault.read(janePath)).toContain("Jane Doe");
+    expect(data.state.managedDuplicates).toEqual([]);
+    expect(engine.queue.size).toBe(0);
+  });
+
+  test.each(["in Obsidian", "while Obsidian was closed"])(
+    "keeping the untracked copy (%s) adopts it and delivers the held change",
+    async (how) => {
+      const { vault, data, engine } = await duplicated();
+      await vault.trash(janePath);
+      if (how === "in Obsidian") engine.handleDeleted(janePath);
+      await engine.pull();
+      expect(await vault.read(copy)).toContain("Jane Doe");
+      expect(data.state.exportConflicts).toEqual([]);
+      expect(data.state.exports.per_1?.path).toBe(copy);
+      expect(data.state.exports.per_1?.rendered_hash).not.toBe("");
+      expect(data.state.managedDuplicates).toEqual([]);
+    },
+  );
+
+  test("a kept copy that carries local edits stays a conflict instead of being overwritten", async () => {
+    const { vault, data, engine } = await duplicated();
+    await vault.trash(janePath);
+    await vault.write(copy, (await vault.read(copy)) + "\nMy own notes\n");
+    await engine.pull();
+    expect(await vault.read(copy)).toContain("My own notes");
+    expect(await vault.read(copy)).not.toContain("Jane Doe");
+    expect(data.state.exportConflicts).toEqual([copy]);
+  });
+
+  test("trashing duplicates with the tracked file gone keeps the newest copy and delivers the held change", async () => {
+    const { vault, data, engine } = await duplicated();
+    const original = await vault.read(janePath);
+    vault.files.delete(janePath);
+    const older = "Brain/YouSpot/Contacts/Jane copy 2.md";
+    vault.add(older, original);
+    vault.files.get(older)!.mtime = 500;
+    vault.files.get(copy)!.mtime = 3000;
+    await engine.pull();
+    expect(data.state.managedDuplicates?.[0]?.paths).toEqual([older, copy]);
+    await engine.trashDuplicates();
+    expect(vault.trashed).toEqual([older]);
+    expect(await vault.read(copy)).toContain("Jane Doe");
+    expect(data.state.exportConflicts).toEqual([]);
+    expect(data.state.exports.per_1?.path).toBe(copy);
+  });
+
+  test("trashing duplicates never trashes a copy with local edits", async () => {
+    const { vault, data, engine, notices } = await duplicated();
+    await vault.write(copy, (await vault.read(copy)) + "\nMy own notes\n");
+    await engine.trashDuplicates();
+    expect(vault.trashed).toEqual([]);
+    expect(vault.exists(copy)).toBe(true);
+    expect(data.state.managedDuplicates).toEqual([
+      { objectId: "per_1", paths: [copy, janePath], holders: [copy, janePath] },
+    ]);
+    expect(notices.at(-1)).toContain("differs from the kept copy");
+  });
+
+  test("trashing duplicates keeps the file that actually holds the record when the tracked path was overwritten", async () => {
+    const { vault, data, engine } = await duplicated();
+    await vault.write(janePath, "# Unrelated note\n");
+    await engine.pull();
+    expect(data.state.managedDuplicates).toEqual([
+      { objectId: "per_1", paths: [copy, janePath], holders: [copy] },
+    ]);
+    await engine.trashDuplicates();
+    expect(vault.trashed).toEqual([]);
+    expect(await vault.read(janePath)).toBe("# Unrelated note\n");
+    expect(await vault.read(copy)).toContain("Jane Doe");
+    expect(data.state.exports.per_1?.path).toBe(copy);
+    expect(data.state.managedDuplicates).toEqual([]);
+  });
+
+  test("resolving one duplicate delivers its held change while another record stays duplicated", async () => {
+    const { vault, data, engine, lastSince } = await duplicated();
+    const bobPath = "Brain/YouSpot/Contacts/Bob.md";
+    vault.add("Brain/YouSpot/Contacts/Bob copy.md", await vault.read(bobPath));
+    await vault.trash(copy);
+    await engine.pull();
+    expect(lastSince()).toBe("2026-09-02T00:00:00Z");
+    expect(await vault.read(janePath)).toContain("Jane Doe");
+    expect(data.state.managedDuplicates?.map((d) => d.objectId)).toEqual(["per_2"]);
+    expect(data.state.heldSince).toBe("2026-09-02T00:00:00Z");
+  });
+
+  test("reset sync state drops the held watermark", async () => {
+    const { vault, data, engine, lastSince } = await duplicated();
+    await vault.trash(copy);
+    engine.resetState();
+    await engine.pull();
+    expect(lastSince()).toBeNull();
+    expect(data.state.heldSince).toBeUndefined();
+  });
+
+  test("an oversized replay releases the held watermark and leaves a full refresh notice", async () => {
+    const { vault, data, engine, http } = await duplicated();
+    await vault.trash(copy);
+    http.on("GET", "/api/obsidian/changes", (req) => {
+      const since = new URL(req.url).searchParams.get("since");
+      if (since === "2026-09-02T00:00:00Z")
+        return changes(Array.from({ length: 20_001 }, (_, i) => ({ ...bob, object_id: `x${i}` })));
+      return changes([]);
+    });
+    await engine.pull();
+    expect(data.state.downloadError).toBe("Use full refresh for this selection.");
+    expect(data.state.heldSince).toBeUndefined();
+    await engine.pull();
+    expect(data.state.downloadError).toBeNull();
+    expect(data.state.refreshError).toBe(HELD_CHANGES_NEED_REFRESH);
+    expect(data.state.lastError).toBe(HELD_CHANGES_NEED_REFRESH);
+    engine.stop();
+  });
+
+  test("trashing one duplicate while an edited copy keeps another replays the held range", async () => {
+    const { vault, data, engine, lastSince } = await duplicated();
+    const bobPath = "Brain/YouSpot/Contacts/Bob.md";
+    vault.add("Brain/YouSpot/Contacts/Bob copy.md", (await vault.read(bobPath)) + "\nMine\n");
+    await engine.trashDuplicates();
+    expect(vault.trashed).toEqual([copy]);
+    expect(lastSince()).toBe("2026-09-02T00:00:00Z");
+    expect(await vault.read(janePath)).toContain("Jane Doe");
+    expect(data.state.managedDuplicates?.map((d) => d.objectId)).toEqual(["per_2"]);
+    expect(data.state.heldSince).toBe("2026-09-02T00:00:00Z");
+    expect(data.state.replayHeld).toBeUndefined();
+  });
+
+  test("a failed replay request is retried from the held watermark", async () => {
+    const { vault, data, engine, http, lastSince } = await duplicated();
+    const bobPath = "Brain/YouSpot/Contacts/Bob.md";
+    vault.add("Brain/YouSpot/Contacts/Bob copy.md", (await vault.read(bobPath)) + "\nMine\n");
+    await vault.trash(copy);
+    let fail = true;
+    http.on("GET", "/api/obsidian/changes", () => {
+      if (fail) return { status: 500, json: { error: "boom" } };
+      return changes([{ ...jane, name: "Jane Doe" }, bob]);
+    });
+    await engine.pull();
+    expect(data.state.downloadError).toBe("boom");
+    expect(data.state.replayHeld).toBe(true);
+    fail = false;
+    engine.resume();
+    await engine.pull();
+    expect(lastSince()).toBe("2026-09-02T00:00:00Z");
+    expect(await vault.read(janePath)).toContain("Jane Doe");
+    expect(data.state.replayHeld).toBeUndefined();
+    engine.stop();
+  });
+
+  test("a pull that starts while duplicates are being trashed cannot drop the replay", async () => {
+    const { vault, data, engine, http, lastSince } = await duplicated();
+    const bobPath = "Brain/YouSpot/Contacts/Bob.md";
+    vault.add("Brain/YouSpot/Contacts/Bob copy.md", (await vault.read(bobPath)) + "\nMine\n");
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    http.on("GET", "/api/obsidian/changes", async () => {
+      await gate;
+      return changes([{ ...jane, name: "Jane Doe" }, bob]);
+    });
+    const stat = vault.stat.bind(vault);
+    let racing: Promise<unknown> | null = null;
+    vault.stat = (path) => {
+      racing ??= engine.pull();
+      return stat(path);
+    };
+    const clicked = engine.trashDuplicates();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await Promise.all([clicked, racing]);
+    expect(lastSince()).toBe("2026-09-03T00:00:00Z");
+    expect(data.state.replayHeld).toBe(true);
+    await engine.pull();
+    expect(lastSince()).toBe("2026-09-02T00:00:00Z");
+    expect(await vault.read(janePath)).toContain("Jane Doe");
+    expect(data.state.replayHeld).toBeUndefined();
+    engine.stop();
+  });
+
+  test("a full refresh that still skips a held record keeps the full refresh notice", async () => {
+    const { data, engine, http } = await duplicated();
+    data.state.refreshError = HELD_CHANGES_NEED_REFRESH;
+    data.state.heldDropped = true;
+    data.state.refresh = {
+      account: "test@example.invalid",
+      apiBase: data.settings.apiBase,
+      root: "Brain/YouSpot",
+      runId: "run_1",
+      request: {
+        obsidian_version: 1,
+        space_id: "space",
+        types: ["contact"],
+        attachments: "none",
+        request_key: "key",
+      },
+    };
+    http.on("GET", "/api/obsidian/me", () => ({
+      status: 200,
+      json: { email: "test@example.invalid", brain_count: 1 },
+    }));
+    http.on("GET", "/api/obsidian/exports/run_1", () => ({
+      status: 200,
+      json: { run: { id: "run_1", status: "queued" } },
+    }));
+    await engine.refresh();
+    expect(data.state.refreshError).toBe(HELD_CHANGES_NEED_REFRESH);
+    let meFails = true;
+    http.on("GET", "/api/obsidian/me", () =>
+      meFails
+        ? { status: 500, json: { error: "boom" } }
+        : { status: 200, json: { email: "test@example.invalid", brain_count: 1 } },
+    );
+    await engine.refresh();
+    expect(data.state.refreshError).toBe("boom");
+    meFails = false;
+    engine.resume();
+    await engine.refresh();
+    expect(data.state.refreshError).toBe(HELD_CHANGES_NEED_REFRESH);
+    data.state.managedDuplicates = [];
+    await engine.refresh();
+    expect(data.state.refreshError).toBeNull();
+    expect(data.state.heldDropped).toBeUndefined();
+    engine.stop();
+  });
+
+  test("trashing duplicates after the tracked file was renamed keeps the renamed file", async () => {
+    const { vault, data, engine } = await duplicated();
+    const renamed = "Brain/YouSpot/Contacts/Jane Smith.md";
+    await vault.rename(janePath, renamed);
+    engine.handleRenamed(janePath, renamed);
+    await engine.trashDuplicates();
+    expect(vault.trashed).toEqual([copy]);
+    expect(data.state.exports.per_1?.path).toBe(renamed);
+    expect(await vault.read(renamed)).toContain("Jane Doe");
+    expect(data.state.managedDuplicates).toEqual([]);
+  });
+
+  test("trashing duplicates on a paused engine still downloads the held change", async () => {
+    const { vault, data, engine } = await duplicated();
+    engine.pause();
+    await engine.trashDuplicates();
+    expect(vault.trashed).toEqual([copy]);
+    expect(await vault.read(janePath)).toContain("Jane Doe");
+    expect(data.state.heldSince).toBeUndefined();
   });
 });

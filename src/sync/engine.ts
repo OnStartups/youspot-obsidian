@@ -40,6 +40,9 @@ export interface PullSummary {
   trashed: number;
 }
 
+export const HELD_CHANGES_NEED_REFRESH =
+  "Changes held back for duplicated records were not downloaded. Run full refresh to get them.";
+
 const MIN_BACKOFF = 5_000;
 const MAX_BACKOFF = 300_000;
 
@@ -170,8 +173,51 @@ export class SyncEngine {
     return (
       Object.values(this.state.notes).filter((n) => n.conflict).length +
       (this.state.refreshReport?.conflicts.length ?? 0) +
-      (this.state.exportConflicts?.length ?? 0)
+      (this.state.exportConflicts?.length ?? 0) +
+      (this.state.managedDuplicates?.length ?? 0)
     );
+  }
+
+  async trashDuplicates(): Promise<PullSummary> {
+    this.resume();
+    if (this.pulling) await this.pulling;
+    const before = (this.state.managedDuplicates ?? []).map((d) => d.objectId);
+    let edited = 0;
+    for (const duplicate of await recoverManaged(this.deps.vault, this.state, this.rules)) {
+      const tracked = this.state.exports[duplicate.objectId];
+      const holders: { path: string; content: string; mtime: number }[] = [];
+      for (const path of duplicate.holders) {
+        const content = await this.deps.vault.read(path);
+        holders.push({ path, content, mtime: this.deps.vault.stat(path)?.mtime ?? 0 });
+      }
+      const keep =
+        holders.find((h) => h.path === tracked?.path) ??
+        [...holders].sort((a, b) => b.mtime - a.mtime)[0];
+      if (!keep) continue;
+      for (const holder of holders) {
+        if (holder === keep) continue;
+        const pristine =
+          holder.content === keep.content ||
+          (await sha256Hex(holder.content)) === tracked?.rendered_hash;
+        if (!pristine) {
+          edited++;
+          continue;
+        }
+        await this.managedWrite(holder.path, () => this.deps.vault.trash(holder.path));
+      }
+      if (tracked && keep.path !== tracked.path)
+        this.state.exports[duplicate.objectId] = { ...tracked, path: keep.path };
+    }
+    if (edited)
+      this.deps.notify(
+        `YouSpot: ${edited} duplicate ${edited === 1 ? "copy differs" : "copies differ"} from the kept copy and ${edited === 1 ? "was" : "were"} kept. Compare the files listed in settings.`,
+      );
+    const after = new Set(
+      (await recoverManaged(this.deps.vault, this.state, this.rules)).map((d) => d.objectId),
+    );
+    if (before.some((id) => !after.has(id))) this.state.replayHeld = true;
+    await this.save();
+    return this.pull();
   }
 
   resume(): void {
@@ -201,7 +247,12 @@ export class SyncEngine {
       if (this.pulling) await this.pulling;
       try {
         await refreshBrain(this.deps);
-        this.state.refreshError = null;
+        if (this.state.heldDropped && this.state.managedDuplicates?.length)
+          this.state.refreshError = HELD_CHANGES_NEED_REFRESH;
+        else {
+          delete this.state.heldDropped;
+          this.state.refreshError = null;
+        }
       } catch (error) {
         this.failed(error, "refresh");
       }
@@ -233,8 +284,9 @@ export class SyncEngine {
   handleDeleted(path: string): void {
     if (this.managed.has(path)) return;
     if (isExport(path, this.rules)) {
+      const duplicated = new Set(this.state.managedDuplicates?.map((d) => d.objectId));
       for (const [id, entry] of Object.entries(this.state.exports)) {
-        if (entry.path === path) delete this.state.exports[id];
+        if (entry.path === path && !duplicated.has(id)) delete this.state.exports[id];
       }
       return;
     }
@@ -633,24 +685,39 @@ export class SyncEngine {
     }
     if (types.length === 0) return summary;
     try {
+      const before = (this.state.managedDuplicates ?? []).map((d) => d.objectId);
+      const skip = new Set(
+        (await recoverManaged(this.deps.vault, this.state, this.rules)).map((d) => d.objectId),
+      );
+      if (before.some((id) => !skip.has(id))) this.state.replayHeld = true;
+      let since = this.state.watermark;
+      if (this.state.heldSince !== undefined && (this.state.replayHeld || !skip.size))
+        since = this.state.heldSince;
+      else if (skip.size && this.state.heldSince === undefined) this.state.heldSince = since;
       let page = 1;
       let nextSince: string | null = null;
       const objects = [];
       const tombstones = [];
       for (;;) {
-        const res = await this.deps.api.changes(this.state.watermark, types, page);
+        const res = await this.deps.api.changes(since, types, page);
         objects.push(...res.objects);
         tombstones.push(...res.tombstones);
-        if (objects.length + tombstones.length > 20_000)
+        if (objects.length + tombstones.length > 20_000) {
+          if (since === this.state.heldSince) {
+            delete this.state.heldSince;
+            delete this.state.replayHeld;
+            this.state.heldDropped = true;
+            this.state.refreshError = HELD_CHANGES_NEED_REFRESH;
+          }
           throw new Error("Use full refresh for this selection.");
+        }
         nextSince = res.next_since;
         if (!res.has_more) break;
         page += 1;
       }
-      await recoverManaged(this.deps.vault, this.state, this.rules);
       const plan = await planPull(
-        objects,
-        tombstones,
+        objects.filter((obj) => !skip.has(obj.object_id)),
+        tombstones.filter((tomb) => !skip.has(tomb.object_id)),
         this.state,
         this.settings,
         this.rules,
@@ -671,6 +738,10 @@ export class SyncEngine {
       }
       this.state.serverEdited = plan.serverEdited;
       this.state.watermark = nextSince;
+      const stillDuplicated = new Set(this.state.managedDuplicates?.map((d) => d.objectId));
+      if ([...skip].some((id) => !stillDuplicated.has(id))) this.state.replayHeld = true;
+      else if (since === this.state.heldSince) delete this.state.replayHeld;
+      if (!skip.size) delete this.state.heldSince;
       this.state.lastPullAt = this.now;
       this.state.downloadError = null;
       this.backoffMs = MIN_BACKOFF;
@@ -857,6 +928,9 @@ export class SyncEngine {
 
   resetState(): void {
     this.state.watermark = null;
+    delete this.state.heldSince;
+    delete this.state.replayHeld;
+    delete this.state.heldDropped;
     this.state.failures = Object.fromEntries(
       Object.entries(this.state.failures ?? {}).filter(([, failure]) =>
         failure.error.startsWith("Removed from Brain."),

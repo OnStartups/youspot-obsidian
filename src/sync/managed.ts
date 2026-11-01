@@ -1,6 +1,7 @@
-import type { PathRules, SyncState } from "../types";
+import type { ManagedDuplicate, PathRules, SyncState } from "../types";
 import type { VaultPort } from "../vault-port";
 import { splitFrontmatter } from "./frontmatter";
+import { sha256Hex } from "./hash";
 import { isExport } from "./paths";
 
 export function managedIdentity(content: string): string | null {
@@ -19,33 +20,45 @@ export async function recoverManaged(
   vault: VaultPort,
   state: SyncState,
   rules: PathRules,
-): Promise<void> {
-  const found = new Map<string, string>();
+): Promise<ManagedDuplicate[]> {
+  const found = new Map<string, string[]>();
+  const contents = new Map<string, string>();
   for (const file of vault.listMarkdown()) {
     if (!isExport(file.path, rules)) continue;
     const content = await vault.read(file.path);
     const id = managedIdentity(content);
     if (!id) continue;
-    if (found.has(id))
-      throw new Error(
-        "Two managed files claim the same object. Resolve the duplicate before syncing.",
-      );
-    found.set(id, file.path);
+    contents.set(file.path, content);
+    found.set(id, [...(found.get(id) ?? []), file.path]);
+  }
+  const duplicates: ManagedDuplicate[] = [];
+  for (const [id, paths] of found) {
     const existing = state.exports[id];
-    if (existing && existing.path !== file.path && vault.exists(existing.path)) {
-      throw new Error(
-        "Two managed files claim the same object. Resolve the duplicate before syncing.",
-      );
+    if (existing && !paths.includes(existing.path) && vault.exists(existing.path))
+      paths.unshift(existing.path);
+    if (paths.length > 1) {
+      duplicates.push({
+        objectId: id,
+        paths: [...paths].sort(),
+        holders: paths.filter((p) => contents.has(p)).sort(),
+      });
+      continue;
     }
-    const type = vault.cache(file.path)?.frontmatter?.youspot_type;
+    const path = paths[0]!;
+    const type = vault.cache(path)?.frontmatter?.youspot_type;
+    const pristine =
+      existing !== undefined &&
+      (existing.path === path || (await sha256Hex(contents.get(path)!)) === existing.rendered_hash);
     state.exports[id] = {
-      path: file.path,
+      path,
       type: existing?.type ?? (typeof type === "string" ? type : ""),
-      rendered_hash: existing?.path === file.path ? existing.rendered_hash : "",
+      rendered_hash: pristine ? existing.rendered_hash : "",
       updated_at: existing?.updated_at ?? "",
       projection_version:
         existing?.projection_version ??
-        (/^youspot_type:/m.test(splitFrontmatter(content).raw ?? "") ? undefined : 1),
+        (/^youspot_type:/m.test(splitFrontmatter(contents.get(path)!).raw ?? "") ? undefined : 1),
     };
   }
+  state.managedDuplicates = duplicates;
+  return duplicates;
 }

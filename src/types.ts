@@ -180,6 +180,12 @@ export interface ExportState {
   updated_at: string;
 }
 
+export interface ManagedDuplicate {
+  objectId: string;
+  paths: string[];
+  holders: string[];
+}
+
 export interface SyncState {
   pending?: PendingChange[];
   failures?: Record<string, FailedChange>;
@@ -194,6 +200,10 @@ export interface SyncState {
   refreshReport?: RefreshReport;
   pendingWrites?: Record<string, { path: string; hash: string }>;
   exportConflicts?: string[];
+  managedDuplicates?: ManagedDuplicate[];
+  heldSince?: string | null;
+  replayHeld?: boolean;
+  heldDropped?: boolean;
   vaultId: string;
   notes: Record<string, NoteState>;
   exports: Record<string, ExportState>;

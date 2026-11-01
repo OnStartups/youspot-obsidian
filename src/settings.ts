@@ -83,6 +83,7 @@ export class YouSpotSettingTab extends PluginSettingTab {
       state.uploadError,
       state.downloadError,
       state.refreshError,
+      state.managedDuplicates,
     ]);
     if (signature === this.statusSignature) return;
     this.statusSignature = signature;
@@ -469,10 +470,29 @@ export class YouSpotSettingTab extends PluginSettingTab {
       state.exportConflicts?.length
         ? `${state.exportConflicts.length} downloads skipped because a local file already holds the name. Your local files were kept.`
         : "",
+      state.managedDuplicates?.length
+        ? `${state.managedDuplicates.length} YouSpot record${state.managedDuplicates.length === 1 ? " is" : "s are"} claimed by more than one path in the export folder. Those records are not downloaded until one copy remains. Keep the copy that should hold the record and move the other copies to trash, or use Trash duplicate copies: it keeps the tracked copy when that copy still holds the record and the newest copy otherwise, trashes only copies whose content matches, and leaves any path that does not hold the record alone.`
+        : "",
     ].filter(Boolean))
       setting.descEl.createEl("p", { text });
     for (const path of state.exportConflicts?.slice(0, 25) ?? [])
       setting.descEl.createEl("p", { text: path });
+    for (const duplicate of state.managedDuplicates?.slice(0, 25) ?? []) {
+      const tracked = state.exports[duplicate.objectId]?.path;
+      const label = (p: string) =>
+        !duplicate.holders.includes(p)
+          ? `${p} (does not hold the record)`
+          : p === tracked
+            ? `${p} (tracked)`
+            : p;
+      setting.descEl.createEl("p", { text: duplicate.paths.map(label).join("  |  ") });
+    }
+    if (state.managedDuplicates?.length)
+      setting.addButton((button) =>
+        button
+          .setButtonText("Trash duplicate copies")
+          .onClick(() => void this.plugin.run(() => this.plugin.engine.trashDuplicates())),
+      );
     setting.addButton((button) =>
       button
         .setButtonText("Sync now")
