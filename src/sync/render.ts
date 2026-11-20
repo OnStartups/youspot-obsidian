@@ -2,7 +2,7 @@ import type { ChangeObject } from "../types";
 import { emitFrontmatter } from "./frontmatter";
 import { stripExtension } from "./paths";
 
-export const FIELD_ALLOWLIST: Record<string, [string, string][]> = {
+const FIELD_ALLOWLIST: Record<string, [string, string][]> = {
   contact: [
     ["email", "email"],
     ["phone", "phone"],
@@ -37,11 +37,11 @@ function scalarField(value: unknown): string | number | boolean | undefined {
   return undefined;
 }
 
-export function objectUrl(appBase: string, objectId: string): string {
+function objectUrl(appBase: string, objectId: string): string {
   return `${appBase.replace(/\/+$/, "")}/brain/object/${objectId}`;
 }
 
-export function renderFrontmatter(obj: ChangeObject, appBase: string): Record<string, unknown> {
+function renderFrontmatter(obj: ChangeObject, appBase: string): Record<string, unknown> {
   const fm: Record<string, unknown> = {
     youspot_id: obj.object_id,
     youspot_type: obj.type,

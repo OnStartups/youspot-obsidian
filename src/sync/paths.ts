@@ -1,6 +1,6 @@
 import type { PathRules } from "../types";
 
-export const PLURALS: Record<string, string> = {
+const PLURALS: Record<string, string> = {
   contact: "Contacts",
   company: "Companies",
   project: "Projects",
@@ -18,7 +18,7 @@ export const PLURALS: Record<string, string> = {
 const MAX_NAME = 120;
 const ILLEGAL = /[\\/:*?"<>|#^[\]]/g;
 
-export function normalizeFolder(folder: string): string {
+function normalizeFolder(folder: string): string {
   return folder.trim().replace(/^\/+|\/+$/g, "");
 }
 
@@ -64,7 +64,7 @@ export function isExport(path: string, rules: PathRules): boolean {
   return isInFolder(path, exportRoot(rules));
 }
 
-export const CONFLICT_SUFFIX = ".youspot-conflict.md";
+const CONFLICT_SUFFIX = ".youspot-conflict.md";
 
 export function conflictPath(path: string): string {
   return `${stripExtension(path)}${CONFLICT_SUFFIX}`;

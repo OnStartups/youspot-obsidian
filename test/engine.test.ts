@@ -969,10 +969,26 @@ describe("duplicate managed exports", () => {
     vault.add("Brain/YouSpot/Contacts/Bob copy.md", (await vault.read(bobPath)) + "\nMine\n");
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
+    let requested!: () => void;
+    const started = new Promise<void>((resolve) => (requested = resolve));
+    let rejoin!: () => void;
+    const joined = new Promise<void>((resolve) => (rejoin = resolve));
     http.on("GET", "/api/obsidian/changes", async () => {
+      requested();
       await gate;
       return changes([{ ...jane, name: "Jane Doe" }, bob]);
     });
+    const pull = engine.pull.bind(engine);
+    engine.pull = () => {
+      const pending = pull();
+      if (data.state.replayHeld) rejoin();
+      return pending;
+    };
+    const trash = vault.trash.bind(vault);
+    vault.trash = async (path) => {
+      await started;
+      await trash(path);
+    };
     const stat = vault.stat.bind(vault);
     let racing: Promise<unknown> | null = null;
     vault.stat = (path) => {
@@ -980,7 +996,7 @@ describe("duplicate managed exports", () => {
       return stat(path);
     };
     const clicked = engine.trashDuplicates();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await joined;
     release();
     await Promise.all([clicked, racing]);
     expect(lastSince()).toBe("2026-09-03T00:00:00Z");

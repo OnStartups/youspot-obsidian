@@ -51,13 +51,13 @@ export function resolveLinks(
   return out;
 }
 
-export function noteTitle(path: string, frontmatter: Record<string, unknown> | null): string {
+function noteTitle(path: string, frontmatter: Record<string, unknown> | null): string {
   const title = frontmatter?.title;
   if (typeof title === "string" && title.trim()) return title.trim();
   return basename(path);
 }
 
-export function frontmatterId(frontmatter: Record<string, unknown> | null): string | undefined {
+function frontmatterId(frontmatter: Record<string, unknown> | null): string | undefined {
   const id = frontmatter?.youspot_id;
   return typeof id === "string" && id ? id : undefined;
 }

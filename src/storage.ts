@@ -105,7 +105,7 @@ export function sharedSettings(settings: YouSpotSettings): SharedSettings {
   return Object.fromEntries(SHARED_KEYS.map((key) => [key, settings[key]])) as SharedSettings;
 }
 
-export function readShared(raw: unknown, vaultId: string): SharedData {
+function readShared(raw: unknown, vaultId: string): SharedData {
   const input = record(raw);
   const rawSettings = record(input.settings);
   if (

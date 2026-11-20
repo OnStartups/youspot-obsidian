@@ -95,10 +95,6 @@ export function loadPluginData(raw: unknown, vaultId: () => string = newVaultId)
   };
 }
 
-export function resetState(state: SyncState): SyncState {
-  return emptyState(state.vaultId);
-}
-
 export function applyCapabilities(
   settings: YouSpotSettings,
   capabilities: ExportCapabilities,

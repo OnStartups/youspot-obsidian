@@ -20,7 +20,7 @@ export interface PushRequest {
   notes: PushNote[];
 }
 
-export type PushStatus =
+type PushStatus =
   | "created"
   | "updated"
   | "unchanged"
@@ -55,7 +55,7 @@ export type DeleteRef = ({ youspot_id: string } | { path: string }) & {
   expected_synced_at?: string;
 };
 
-export interface DeleteResult {
+interface DeleteResult {
   status: "deleted" | "not_found" | "already_deleted" | "conflict";
   object_id?: string;
 }
@@ -65,7 +65,7 @@ export interface DeleteResponse {
   results: DeleteResult[];
 }
 
-export interface InventoryNote {
+interface InventoryNote {
   object_id: string;
   path: string;
   content_hash: string;
@@ -91,7 +91,7 @@ export interface ServerNote {
   server_edited: boolean;
 }
 
-export interface ChangeConnection {
+interface ChangeConnection {
   type: string;
   direction: "in" | "out";
   object_id: string;
@@ -158,12 +158,12 @@ export interface YouSpotSettings {
   selectionInitialized?: boolean;
 }
 
-export interface NoteConflict {
+interface NoteConflict {
   server_hash: string;
   server_updated_at: string;
 }
 
-export interface NoteState {
+interface NoteState {
   youspot_id: string;
   local_hash: string;
   content_hash: string;
@@ -172,7 +172,7 @@ export interface NoteState {
   conflict?: NoteConflict;
 }
 
-export interface ExportState {
+interface ExportState {
   projection_version?: number;
   path: string;
   type: string;
@@ -231,13 +231,13 @@ export interface PendingChange {
   expectedSyncedAt?: string;
 }
 
-export interface FailedChange {
+interface FailedChange {
   entry: PendingChange;
   error: string;
   hash?: string;
 }
 
-export interface MissingNote {
+interface MissingNote {
   objectId: string;
   path: string;
   contentHash: string;
@@ -289,7 +289,7 @@ export interface RefreshRequest {
   request_key: string;
 }
 
-export interface RefreshState {
+interface RefreshState {
   request: RefreshRequest;
   apiBase: string;
   account: string;

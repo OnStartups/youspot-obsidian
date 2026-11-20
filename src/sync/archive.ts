@@ -6,7 +6,7 @@ import { dirname } from "./paths";
 const MAX_BYTES = 50 * 1024 * 1024;
 const MAX_FILES = 22_010;
 
-export interface ArchiveRecord {
+interface ArchiveRecord {
   id: string;
   type: string;
   title: string;
@@ -14,7 +14,7 @@ export interface ArchiveRecord {
   updated_at: string;
 }
 
-export interface ArchiveAsset {
+interface ArchiveAsset {
   id: string;
   status: string;
   path?: string;

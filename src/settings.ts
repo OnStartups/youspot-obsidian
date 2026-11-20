@@ -16,8 +16,6 @@ import type YouSpotPlugin from "./main";
 import { DEFAULT_SETTINGS, applyCapabilities } from "./sync/state";
 import type { YouSpotSettings } from "./types";
 
-export { DEFAULT_SETTINGS };
-
 const PLUGIN_PAGE = "https://community.obsidian.md/plugins/youspot";
 
 class ConfirmModal extends Modal {

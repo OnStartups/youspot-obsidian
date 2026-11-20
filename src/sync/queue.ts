@@ -1,6 +1,6 @@
-export type QueueKind = "upsert" | "delete";
+import type { PendingChange } from "../types";
 
-export type QueueEntry = import("../types").PendingChange;
+export type QueueEntry = PendingChange;
 
 export const BATCH_SIZE = 100;
 
